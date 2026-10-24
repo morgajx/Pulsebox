@@ -17,6 +17,98 @@ BAND_LABELS = ["31Hz", "63Hz", "125Hz", "250Hz", "500Hz",
                "1kHz", "2kHz", "4kHz", "8kHz", "16kHz"]
 
 
+class CanvasFader(tk.Canvas):
+    """
+    A vertical fader drawn on a Canvas so its bar width is exact — unlike
+    ttk.Scale, whose trough thickness is theme-locked. Drop-in enough for the
+    EQ page: it's bound to a tk variable, fires ``command(value)`` on every
+    change, and supports click/drag to set the value.
+    """
+
+    def __init__(self, parent, variable, from_=20.0, to=-20.0,
+                 length=450, width=40, command=None,
+                 trough="#101018", fill="#28c8ff", handle="#f0f0f8",
+                 bg="#0a0a12"):
+        super().__init__(parent, width=width, height=length,
+                         bg=bg, highlightthickness=0, cursor="hand2")
+        self._var = variable
+        self._from = float(from_)          # value at the top
+        self._to = float(to)               # value at the bottom
+        self._len = int(length)
+        self._cw = int(width)              # NOT self._w — tkinter owns that
+        self._command = command
+        self._trough = trough
+        self._fill = fill
+        self._handle = handle
+
+        self.bind("<Button-1>", self._on_drag)
+        self.bind("<B1-Motion>", self._on_drag)
+        self.bind("<Configure>", lambda e: self._redraw())
+        self._trace = self._var.trace_add("write", lambda *_: self._changed())
+        self._redraw()
+
+    # value <-> y-pixel mapping
+    def _val_to_y(self, val: float) -> int:
+        span = self._from - self._to
+        frac = (self._from - val) / span if span else 0.5
+        return int(max(0.0, min(1.0, frac)) * self._len)
+
+    def _y_to_val(self, y: float) -> float:
+        frac = max(0.0, min(1.0, y / self._len))
+        return self._from - frac * (self._from - self._to)
+
+    def _on_drag(self, event):
+        val = round(self._y_to_val(event.y))
+        val = max(min(self._from, self._to) + 0,
+                  min(max(self._from, self._to), val))
+        if val != self._var.get():
+            self._var.set(val)          # trace -> _changed -> redraw + command
+        else:
+            self._redraw()
+
+    def _changed(self):
+        self._redraw()
+        if self._command:
+            try:
+                self._command(self._var.get())
+            except Exception:
+                pass
+
+    def _redraw(self):
+        self.delete("all")
+        w, L = self._cw, self._len
+        cx = w // 2
+        bar_w = max(12, w - 8)           # the visible bar — full, controllable
+        x0, x1 = cx - bar_w // 2, cx + bar_w // 2
+
+        # trough
+        self.create_rectangle(x0, 2, x1, L - 2, fill=self._trough,
+                              outline="", width=0)
+        # zero line
+        yz = self._val_to_y(0.0)
+        self.create_line(x0, yz, x1, yz, fill="#3a3a48")
+        # fill from zero to current value
+        try:
+            val = float(self._var.get())
+        except Exception:
+            val = 0.0
+        yv = self._val_to_y(val)
+        top, bot = (yv, yz) if yv < yz else (yz, yv)
+        colour = self._fill if val >= 0 else "#ff7043"   # boost vs cut
+        if abs(yv - yz) > 1:
+            self.create_rectangle(x0, top, x1, bot, fill=colour,
+                                  outline="", width=0)
+        # handle
+        self.create_rectangle(x0 - 2, yv - 4, x1 + 2, yv + 4,
+                              fill=self._handle, outline="", width=0)
+
+    def set(self, value):
+        self._var.set(value)
+
+    def get(self):
+        return self._var.get()
+
+
 class EqualizerPage(tk.Frame):
 
     def __init__(self, parent, player, **kwargs):
@@ -82,13 +174,7 @@ class EqualizerPage(tk.Frame):
         eq_frame = tk.Frame(eq_outer, bg=BG_PANEL)
         eq_frame.place(relx=0.5, rely=1.0, anchor="s")
 
-        # Wider vertical slider style (1.5× default)
-        style = ttk.Style()
-        style.configure("EQ.Vertical.TScale",
-                        sliderlength=24,
-                        sliderwidth=18,
-                        troughcolor=BG_DARK,
-                        background=BG_PANEL)
+        # Band sliders are custom CanvasFaders (see below) for exact bar width.
 
         # Preamp column
         preamp_col = tk.Frame(eq_frame, bg=BG_PANEL)
@@ -103,13 +189,12 @@ class EqualizerPage(tk.Frame):
                               font=FONT_SMALL, fg=ACCENT, bg=BG_PANEL)
         preamp_lbl.pack()
 
-        preamp_sl = ttk.Scale(preamp_col, from_=20, to=-20,
-                              variable=self._preamp,
-                              orient="vertical", length=300,
-                              style="EQ.Vertical.TScale",
-                              command=lambda v, l=preamp_lbl:
-                              (l.config(text=f"{float(v):+.0f}"),
-                               self._on_change()))
+        preamp_sl = CanvasFader(preamp_col, self._preamp,
+                                from_=20, to=-20, length=450, width=44,
+                                fill=ACCENT, bg=BG_PANEL, trough=BG_DARK,
+                                command=lambda v, l=preamp_lbl:
+                                (l.config(text=f"{float(v):+.0f}"),
+                                 self._on_change()))
         preamp_sl.pack()
 
         tk.Label(preamp_col, text="0dB", font=FONT_TINY,
@@ -125,19 +210,18 @@ class EqualizerPage(tk.Frame):
 
         for i, (label, var) in enumerate(zip(BAND_LABELS, self._bands)):
             col = tk.Frame(bands_frame, bg=BG_PANEL)
-            col.pack(side="left", padx=6, anchor="s")
+            col.pack(side="left", padx=12, anchor="s")
 
             val_lbl = tk.Label(col, text=f"{var.get():+.0f}",
                                font=FONT_TINY, fg=NEON_BLUE, bg=BG_PANEL)
             val_lbl.pack()
 
-            sl = ttk.Scale(col, from_=20, to=-20,
-                           variable=var,
-                           orient="vertical", length=300,
-                           style="EQ.Vertical.TScale",
-                           command=lambda v, l=val_lbl, idx=i:
-                           (l.config(text=f"{float(v):+.0f}"),
-                            self._on_band_change(idx, float(v))))
+            sl = CanvasFader(col, var, from_=20, to=-20,
+                             length=450, width=44,
+                             fill=NEON_BLUE, bg=BG_PANEL, trough=BG_DARK,
+                             command=lambda v, l=val_lbl, idx=i:
+                             (l.config(text=f"{float(v):+.0f}"),
+                              self._on_band_change(idx, float(v))))
             sl.pack(pady=2)
             self._sliders.append(sl)
 

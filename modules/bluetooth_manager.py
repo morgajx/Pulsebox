@@ -49,13 +49,22 @@ def _bt_set_power(on: bool) -> tuple[bool, str]:
     return _bt_cmd(["power", "on" if on else "off"])
 
 
-def _bt_scan_start():
-    subprocess.Popen(["bluetoothctl", "scan", "on"],
-                     stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL)
+def _bt_scan_start(seconds: int = 20):
+    # A bare `scan on` one-shot exits immediately, and discovery stops the
+    # moment that process dies — so nothing new is ever found and `devices`
+    # only lists already-known ones (the "only 1 device" bug). `--timeout`
+    # keeps this process (and the scan) alive for the whole window, so devices
+    # are actually discovered and added to BlueZ's list.
+    try:
+        return subprocess.Popen(
+            ["bluetoothctl", "--timeout", str(seconds), "scan", "on"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        return None
 
 
 def _bt_scan_stop():
+    # Usually unnecessary (--timeout ends the scan), but harmless as a backstop.
     subprocess.Popen(["bluetoothctl", "scan", "off"],
                      stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL)
@@ -242,9 +251,11 @@ class BluetoothManager(JukeboxModule):
         self._status_var.set(f"Scanning for {self.SCAN_DURATION}s…")
 
         def _run():
-            _bt_scan_start()
-            # Poll every 3s during scan window
-            for _ in range(self.SCAN_DURATION // 3):
+            # Keep discovery alive for the whole window so devices are found.
+            _bt_scan_start(self.SCAN_DURATION)
+            # Poll every 3s during scan window so the list fills in as devices
+            # are discovered.
+            for _ in range(max(1, self.SCAN_DURATION // 3)):
                 time.sleep(3)
                 if self.app:
                     self.app.root.after(0, self._refresh_devices)

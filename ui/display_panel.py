@@ -64,6 +64,13 @@ class VUMeterWidget(tk.Canvas):
     def _tick(self):
         if not self._running:
             return
+        # Skip the work when the meter isn't on screen (kiosk perf).
+        try:
+            if not self.winfo_viewable():
+                self._tick_id = self.after(300, self._tick)
+                return
+        except Exception:
+            pass
         import math, random
         self._phase += 0.18
 
@@ -240,15 +247,26 @@ class VLCVisualiser:
             self._parent, bg="#000000",
             highlightthickness=0)
         self._canvas.pack(fill="both", expand=True)
-        self._bars = [random.random() * 0.3 for _ in range(32)]
-        self._targets = [random.random() for _ in range(32)]
+        self._n_bars = 32
+        self._bars = [random.random() * 0.3 for _ in range(self._n_bars)]
+        self._targets = [random.random() for _ in range(self._n_bars)]
         self._animate_spectrum()
 
     def _animate_spectrum(self):
         if not self._running or not self._canvas:
             return
-        import math, random
-        # Update bar levels
+        c = self._canvas
+        # Don't burn CPU animating when the visualiser isn't on screen — a big
+        # win in kiosk mode, where there's no compositor to skip the repaint.
+        try:
+            viewable = c.winfo_viewable()
+        except Exception:
+            viewable = True
+        if not viewable:
+            self._tick_id = c.after(300, self._animate_spectrum)
+            return
+
+        import random
         vol = (self._player.get_volume() / 100.0
                if self._player else 0.5)
         for i in range(len(self._bars)):
@@ -264,39 +282,43 @@ class VLCVisualiser:
         w = c.winfo_width()
         h = c.winfo_height()
         if w < 2 or h < 2:
-            self._tick_id = c.after(100, self._animate_spectrum)
             return
-        c.delete("all")
-        c.create_rectangle(0, 0, w, h, fill="#000000", outline="")
-
         n = len(self._bars)
-        bar_w = max(2, w // n - 2)
-        gap = (w - n * bar_w) // (n + 1)
 
+        # Build persistent canvas items once (and rebuild only on resize).
+        # Updating item coords each frame — instead of delete('all') + recreate
+        # — avoids a full-canvas repaint, which is what makes this smooth on a
+        # kiosk with software rendering.
+        if (getattr(self, "_built_w", 0) != w or getattr(self, "_built_h", 0) != h
+                or not getattr(self, "_bar_ids", None)):
+            c.delete("all")
+            c.create_rectangle(0, 0, w, h, fill="#000000", outline="")
+            self._bar_w = max(2, w // n - 2)
+            self._gap = (w - n * self._bar_w) // (n + 1)
+            self._bar_ids = []
+            self._cap_ids = []
+            for i in range(n):
+                if i < n // 3:
+                    col = "#00cc88"
+                elif i < 2 * n // 3:
+                    col = "#e8b004"
+                else:
+                    col = "#ff2d78"
+                self._bar_ids.append(
+                    c.create_rectangle(0, 0, 0, 0, fill=col, outline=""))
+                self._cap_ids.append(
+                    c.create_rectangle(0, 0, 0, 0, fill="#ffffff", outline=""))
+            c.create_text(w // 2, 6, text="VLC VISUALISER",
+                          fill="#333355", font=("Helvetica", 8, "bold"))
+            self._built_w, self._built_h = w, h
+
+        bar_w, gap = self._bar_w, self._gap
         for i, level in enumerate(self._bars):
             x = gap + i * (bar_w + gap)
-            bar_h = int(level * (h - 20))
+            bar_h = int(max(0.0, level) * (h - 20))
             y_top = h - bar_h - 10
-
-            # Colour by frequency band
-            if i < n // 3:
-                col = "#00cc88"   # bass — green
-            elif i < 2 * n // 3:
-                col = "#e8b004"   # mid — amber
-            else:
-                col = "#ff2d78"   # high — pink
-
-            if bar_h > 0:
-                c.create_rectangle(x, y_top, x + bar_w, h - 10,
-                                    fill=col, outline="")
-            # Cap
-            c.create_rectangle(x, y_top - 3, x + bar_w, y_top,
-                                fill="#ffffff", outline="")
-
-        c.create_text(w // 2, 6,
-                      text="VLC VISUALISER",
-                      fill="#333355",
-                      font=("Helvetica", 8, "bold"))
+            c.coords(self._bar_ids[i], x, y_top, x + bar_w, h - 10)
+            c.coords(self._cap_ids[i], x, y_top - 3, x + bar_w, y_top)
 
 
 # ---------------------------------------------------------------------------

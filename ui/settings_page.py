@@ -41,10 +41,20 @@ _SECTION_COLOURS = [
 # ---------------------------------------------------------------------------
 
 def _scan_wifi_networks() -> list[tuple[str, str]]:
+    def _run(rescan: bool) -> str:
+        cmd = ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY",
+               "dev", "wifi", "list"]
+        if rescan:
+            # Force a fresh scan — without this, nmcli returns its stale cache,
+            # which is often just the connected AP (the "only 1 SSID" bug).
+            cmd += ["--rescan", "yes"]
+        return subprocess.check_output(cmd, stderr=subprocess.DEVNULL,
+                                       timeout=15, text=True)
     try:
-        out = subprocess.check_output(
-            ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list"],
-            stderr=subprocess.DEVNULL, timeout=8, text=True)
+        try:
+            out = _run(True)      # fresh scan -> full list
+        except Exception:
+            out = _run(False)     # rescan rate-limited/failed -> cached list
         seen, networks = set(), []
         for line in out.strip().splitlines():
             parts = line.split(":")
@@ -408,6 +418,7 @@ class SettingsPage(tk.Frame):
         tk.Checkbutton(r, text=label, variable=v,
                        font=FONT_BODY, fg=TEXT_PRIMARY,
                        bg=BG_CARD, activebackground=BG_CARD,
+                       activeforeground=TEXT_PRIMARY,   # keep text white when active/selected
                        selectcolor=BG_PANEL, cursor="hand2").pack(side="left")
 
     def _add_choice(self, parent, key, label, options):
@@ -418,6 +429,7 @@ class SettingsPage(tk.Frame):
             tk.Radiobutton(r, text=opt.capitalize(), variable=v, value=opt,
                            font=FONT_SMALL, fg=TEXT_PRIMARY,
                            bg=BG_CARD, activebackground=BG_CARD,
+                           activeforeground=TEXT_PRIMARY,   # keep text white when active/selected
                            selectcolor=BG_PANEL, cursor="hand2").pack(
                 side="left", padx=8)
 

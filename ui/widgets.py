@@ -12,6 +12,94 @@ from .theme import (ACCENT, ACCENT2, BG_CARD, BG_CARD_HOVER, BG_DARK, BG_PANEL,
                     ART_SIZE, CARD_W, PAD, PAD_SM, PLAYER_H)
 
 
+class HTouchFader(tk.Canvas):
+    """
+    Horizontal slider drawn on a Canvas, built for touch: tapping ANYWHERE on
+    the bar jumps the value to that point, and dragging works too. A ttk.Scale
+    needs the handle grabbed and dragged, which is unreliable on a touchscreen
+    — this is why the player-bar volume felt unresponsive.
+
+    Bound to an IntVar; fires command(value) on user interaction only (not on
+    programmatic var changes, so syncing from the player doesn't loop back).
+    """
+
+    def __init__(self, parent, variable, from_=0, to=100, length=120,
+                 height=28, command=None, bg="#1a1a24",
+                 trough="#0a0a12", fill="#28c8ff", handle="#f0f0f8"):
+        super().__init__(parent, width=length, height=height,
+                         bg=bg, highlightthickness=0, cursor="hand2")
+        self._var = variable
+        self._from = float(from_)
+        self._to = float(to)
+        self._len = int(length)
+        self._h = int(height)
+        self._command = command
+        self._trough = trough
+        self._fill = fill
+        self._handle = handle
+        self._user_driving = False
+        self.bind("<Button-1>", self._on_touch)
+        self.bind("<B1-Motion>", self._on_touch)
+        self.bind("<Configure>", lambda e: self._redraw())
+        # redraw (but don't fire command) when the var changes programmatically
+        self._var.trace_add("write", lambda *_: self._redraw())
+        self._redraw()
+
+    def _x_to_val(self, x):
+        pad = 6
+        frac = (x - pad) / max(1, (self._len - 2 * pad))
+        frac = max(0.0, min(1.0, frac))
+        return round(self._from + frac * (self._to - self._from))
+
+    def _val_to_x(self, val):
+        pad = 6
+        frac = (val - self._from) / max(1e-9, (self._to - self._from))
+        return pad + frac * (self._len - 2 * pad)
+
+    def _on_touch(self, event):
+        val = self._x_to_val(event.x)
+        if val != self._var.get():
+            self._user_driving = True
+            self._var.set(val)          # trace -> _redraw
+            self._user_driving = False
+            if self._command:
+                try:
+                    self._command(val)
+                except Exception:
+                    pass
+        else:
+            self._redraw()
+
+    def _redraw(self):
+        self.delete("all")
+        w = self._len
+        h = self._h
+        cy = h // 2
+        pad = 6
+        # trough
+        self.create_line(pad, cy, w - pad, cy, fill=self._trough, width=6,
+                         capstyle="round")
+        try:
+            val = float(self._var.get())
+        except Exception:
+            val = self._from
+        hx = self._val_to_x(val)
+        # filled portion
+        if hx > pad:
+            self.create_line(pad, cy, hx, cy, fill=self._fill, width=6,
+                             capstyle="round")
+        # handle — big enough to be an obvious touch target
+        r = 9
+        self.create_oval(hx - r, cy - r, hx + r, cy + r,
+                         fill=self._handle, outline="")
+
+    def set(self, value):
+        self._var.set(value)
+
+    def get(self):
+        return self._var.get()
+
+
 class ScrollableFrame(tk.Frame):
     """
     Vertical scrollable frame using a Canvas.
@@ -331,7 +419,9 @@ class PlayerBar(tk.Frame):
         main.pack(fill="both", expand=True, padx=12, pady=2)
 
         # ── Left: track info ──────────────────────────────────────────
-        left = tk.Frame(main, bg=BG_PANEL, width=280)
+        # Wider than before (was 280) so long track titles like
+        # "Communications Breakdown" aren't clipped at the right edge.
+        left = tk.Frame(main, bg=BG_PANEL, width=360)
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
 
@@ -339,17 +429,17 @@ class PlayerBar(tk.Frame):
             left, text="No track playing",
             font=FONT_SUBHEAD, fg=TEXT_PRIMARY,
             bg=BG_PANEL, anchor="w")
-        self._lbl_title.pack(fill="x")
+        self._lbl_title.pack(fill="x", padx=(0, 10))
 
         self._lbl_artist = tk.Label(
             left, text="—", font=FONT_SMALL,
             fg=ACCENT, bg=BG_PANEL, anchor="w")
-        self._lbl_artist.pack(fill="x")
+        self._lbl_artist.pack(fill="x", padx=(0, 10))
 
         self._lbl_album = tk.Label(
             left, text="", font=FONT_TINY,
             fg=TEXT_PRIMARY, bg=BG_PANEL, anchor="w")
-        self._lbl_album.pack(fill="x")
+        self._lbl_album.pack(fill="x", padx=(0, 10))
 
         # ── Centre: transport + seek ──────────────────────────────────
         centre = tk.Frame(main, bg=BG_PANEL)
@@ -422,11 +512,12 @@ class PlayerBar(tk.Frame):
 
         self._vol_var = tk.IntVar(value=self._player.get_volume())
         self._syncing_vol = False   # guards against feedback when syncing
-        ttk.Scale(vol_row, from_=0, to=100,
-                  variable=self._vol_var,
-                  orient="horizontal", length=120,
-                  style="PB.Horizontal.TScale",
-                  command=self._on_vol_change).pack(side="left", padx=4)
+        # Touch-friendly volume fader: tap anywhere on the bar to set the level
+        # (a ttk.Scale needs the handle dragged, which is unreliable by touch).
+        HTouchFader(vol_row, variable=self._vol_var, from_=0, to=100,
+                    length=120, height=28,
+                    bg=BG_PANEL, fill=ACCENT,
+                    command=self._on_vol_change).pack(side="left", padx=4)
 
         self._lbl_vol = tk.Label(vol_row,
                                  text=f"{self._player.get_volume()}%",
@@ -525,6 +616,16 @@ class PlayerBar(tk.Frame):
         dur = self._player.get_duration()
         if dur > 0:
             self._player.seek((self._seek_var.get() / 100) * dur)
+
+    def show_no_audio_device(self):
+        """Show a persistent 'no audio device' state in the player bar."""
+        try:
+            self._lbl_title.config(text="⚠ No audio device — check connection",
+                                   fg="#ff7043")
+            self._lbl_artist.config(text="Audio disabled; UI is running")
+            self._lbl_album.config(text="")
+        except Exception:
+            pass
 
     def clear(self):
         """Reset player bar to stopped/empty state."""

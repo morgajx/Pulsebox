@@ -278,23 +278,78 @@ def _write_config_txt(lines: list[str]) -> tuple[bool, str]:
         return False, str(e)
 
 
+def _is_managed_marker(line: str) -> bool:
+    """
+    True if a line is one of our marker comments, tolerant of spacing so old
+    entries (e.g. '#PulseBox audio output' with no space) are still matched.
+    A mismatch here is what let duplicate/orphaned lines accumulate before.
+    """
+    s = line.strip().lstrip("#").strip().lower()
+    return s.startswith("pulsebox audio output")
+
+
 def _remove_managed_lines(lines: list[str]) -> list[str]:
-    """Remove all lines previously written by this module."""
-    out = []
+    """
+    Remove everything this module previously wrote so a re-apply never
+    duplicates or orphans entries. Specifically:
+      * our marker comments (any spacing) and the managed block after each,
+        tolerating stray blank lines that earlier buggy writes left behind;
+      * ANY 'dtoverlay=hifiberry-*' line — this module owns the HiFiBerry HAT
+        overlay, and a duplicate of it wedges the I2C bus (SDA stuck low).
+    Leftover runs of blank lines are collapsed.
+    """
+    out: list[str] = []
     i = 0
-    while i < len(lines):
+    n = len(lines)
+    while i < n:
         line = lines[i]
-        if MANAGED_MARKER in line:
-            # Skip this line and any immediately following managed content
+        if _is_managed_marker(line):
             i += 1
-            while i < len(lines) and lines[i].strip().startswith(
-                    ("dtoverlay=", "hdmi_drive", "dtparam=audio",
-                     "# hdmi", "# i2c", "# dtoverlay")):
-                i += 1
+            while i < n:
+                t = lines[i].strip()
+                if (t.startswith(("dtoverlay=", "hdmi_drive"))
+                        or t == "dtparam=audio=off"
+                        or t.startswith("dtparam=i2c_arm=on,i2c_arm_baudrate=")
+                        or t.startswith(("# hdmi", "# i2c", "# dtoverlay"))
+                        or _is_managed_marker(lines[i])):
+                    i += 1
+                    continue
+                if t == "":
+                    # tolerate blank gaps inside a fragmented old block:
+                    # skip blanks only if managed content resumes after them
+                    j = i
+                    while j < n and lines[j].strip() == "":
+                        j += 1
+                    nxt = lines[j].strip() if j < n else ""
+                    if j < n and (nxt.startswith(
+                            ("dtoverlay=", "dtparam=audio", "dtparam=i2c",
+                             "hdmi_drive"))
+                            or _is_managed_marker(lines[j])):
+                        i = j
+                        continue
+                break
+            continue
+        # A stray HiFiBerry overlay outside any managed block — drop it so we
+        # never end up with two dtoverlay=hifiberry-* lines.
+        s = line.strip()
+        if s.startswith("dtoverlay=") and "hifiberry" in s:
+            i += 1
             continue
         out.append(line)
         i += 1
-    return out
+
+    # Collapse consecutive blank lines the removal may have left behind.
+    cleaned: list[str] = []
+    blanks = 0
+    for l in out:
+        if l.strip() == "":
+            blanks += 1
+            if blanks > 1:
+                continue
+        else:
+            blanks = 0
+        cleaned.append(l)
+    return cleaned
 
 
 def _get_current_audio_config() -> dict:

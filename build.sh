@@ -40,9 +40,21 @@ echo "======================================================"
 
 # ── Sanity checks ─────────────────────────────────────────────────────────────
 if ! python3 -m nuitka --version &>/dev/null 2>&1; then
-    echo "ERROR: Nuitka not found."
-    echo "       Install: pip install nuitka ordered-set zstandard --break-system-packages"
-    exit 1
+    echo "→ Nuitka not found — installing it now..."
+    pip install nuitka ordered-set zstandard --break-system-packages --quiet \
+        || python3 -m pip install nuitka ordered-set zstandard \
+             --break-system-packages --quiet || true
+    # patchelf is needed for --standalone/--onefile
+    if ! command -v patchelf >/dev/null 2>&1; then
+        sudo apt-get install -y patchelf >/dev/null 2>&1 || true
+    fi
+    if ! python3 -m nuitka --version &>/dev/null 2>&1; then
+        echo "ERROR: Nuitka still not available after install attempt."
+        echo "       Install manually, then re-run:"
+        echo "       pip install nuitka ordered-set zstandard --break-system-packages"
+        exit 1
+    fi
+    echo "  ✓ Nuitka installed."
 fi
 
 if $CLEAN; then

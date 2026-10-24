@@ -55,6 +55,22 @@ def _find_hw_control(card_name: str) -> str:
     return ""
 
 
+def _audio_card_present() -> bool:
+    """
+    True if ALSA sees at least one playback sound card. Used so PulseBox can
+    stay up and show a clear "no audio device" state instead of thrashing when
+    the DAC is missing/faulty.
+    """
+    import subprocess
+    try:
+        r = subprocess.run(["aplay", "-l"], capture_output=True,
+                           text=True, timeout=5)
+        return "card " in (r.stdout or "")
+    except Exception:
+        # If aplay isn't available we can't tell — assume present, don't block.
+        return True
+
+
 def _amixer_set_scaled(card: str, ctl: str, vol: int) -> bool:
     """
     Set an ALSA control from a 0-100 slider value where the slider is a
@@ -121,6 +137,13 @@ class JukeboxPlayer:
         self._callbacks: dict[str, list] = {}
         self._position_thread: threading.Thread | None = None
         self._running = False
+
+        # Stays up gracefully when the DAC is missing/faulty: the UI runs, but
+        # audio is disabled and this flag lets the app show a clear message.
+        self.no_audio_device = not _audio_card_present()
+        if self.no_audio_device:
+            print("[Player] WARNING: no audio device detected. UI will run "
+                  "but audio is disabled until a sound card appears.")
 
         self._init_vlc()
 
@@ -243,6 +266,36 @@ class JukeboxPlayer:
             self._player.play()
         elif self._queue and self._current_index >= 0:
             self._play_track(self._queue[self._current_index])
+
+    def play_mrl(self, mrl: str, options: list | None = None,
+                 meta: dict | None = None):
+        """
+        Play an arbitrary VLC media resource locator (MRL) through the shared
+        player instance — e.g. "cdda:///dev/sr0" for an audio CD. Unlike
+        _play_track(), this does NOT require a real file on disk, so it works
+        for optical-disc and network MRLs. Per-media options (e.g.
+        ":cdda-track=3") are applied before playback. Emits track_started with
+        `meta` so the player bar updates. Audio follows the same hardware/VLC
+        volume path as normal playback.
+        """
+        if not self._vlc_available or not self._player:
+            return False
+        try:
+            self._player.stop()
+            media = self._instance.media_new(mrl)
+            for opt in (options or []):
+                media.add_option(opt)
+            self._player.set_media(media)
+            self._player.play()
+            if not self._hw_ctl:
+                self._player.audio_set_volume(self._volume)
+            self._state = PlayerState.PLAYING
+            self._emit("track_started", meta or {"title": mrl})
+            self._start_position_thread()
+            return True
+        except Exception as e:
+            print(f"[Player] play_mrl failed for {mrl}: {e}")
+            return False
 
     def pause(self):
         if self._vlc_available:

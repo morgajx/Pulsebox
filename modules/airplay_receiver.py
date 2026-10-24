@@ -6,10 +6,13 @@ Apple device streams to it:
 
   * PulseBox detects the stream (via Shairport Sync's metadata pipe),
   * pauses local playback and switches to a full-screen Now Playing display
-    with album art and track metadata,
-  * offers transport controls where the source supports them (via Shairport
-    Sync's D-Bus remote-control interface), and
+    with album art and track metadata, and
   * returns to the PulseBox home screen automatically when streaming stops.
+
+Transport controls are deliberately not offered: macOS streams in AirPlay 2
+"Buffered" mode and doesn't supply the DACP credentials (daid/acre) that
+Shairport Sync needs to relay commands back to the sender, so such buttons
+could never work. Use the controls on the source device.
 
 Shairport Sync handles the actual audio — it plays straight to the sound
 device. This module only reacts to it. AirPlay 2 support is NOT an apt package;
@@ -45,6 +48,53 @@ def _is_image(data: bytes) -> bool:
             or data[:8] == b"\x89PNG\r\n\x1a\n"          # PNG
             or data[:6] in (b"GIF87a", b"GIF89a")        # GIF
             or data[:2] == b"BM")                        # BMP
+
+
+def _parse_bplist(data: bytes):
+    """
+    Parse an Apple binary plist payload ('bplist00'), returning
+    (image_bytes|None, {meta}) — some senders (notably macOS in AirPlay 2
+    'Buffered' mode) wrap cover art and track metadata in a plist instead of
+    sending discrete minm/asar/asal/PICT items.
+    """
+    if not data[:8] == b"bplist00":
+        return (None, {})
+    try:
+        import plistlib
+        obj = plistlib.loads(data, fmt=plistlib.FMT_BINARY)
+    except Exception as e:
+        print(f"[AirPlay] bplist parse failed: {e}")
+        return (None, {})
+
+    image = None
+    meta = {}
+    _KEYS = {
+        "title": "title", "name": "title", "itemname": "title",
+        "artist": "artist", "albumartist": "artist",
+        "album": "album", "albumname": "album",
+    }
+
+    def walk(o):
+        nonlocal image
+        if isinstance(o, dict):
+            for k, v in o.items():
+                kl = str(k).lower().replace("_", "").replace(" ", "")
+                if isinstance(v, (bytes, bytearray)):
+                    if image is None and _is_image(bytes(v)):
+                        image = bytes(v)
+                elif isinstance(v, str) and kl in _KEYS and v.strip():
+                    meta.setdefault(_KEYS[kl], v.strip())
+                else:
+                    walk(v)
+        elif isinstance(o, (list, tuple)):
+            for v in o:
+                walk(v)
+        elif isinstance(o, (bytes, bytearray)):
+            if image is None and _is_image(bytes(o)):
+                image = bytes(o)
+
+    walk(obj)
+    return (image, meta)
 
 
 def _extract_image(data: bytes):
@@ -92,7 +142,7 @@ class AirPlayReceiverModule(JukeboxModule):
     MODULE_VERSION     = APP_VERSION
     MODULE_DESCRIPTION = (
         "Receive AirPlay 2 streams from Apple devices via Shairport Sync, with "
-        "a full-screen Now Playing display, album art and transport controls. "
+        "a full-screen Now Playing display with album art and track metadata. "
         "Requires Shairport Sync built with AirPlay 2 (see scripts/install_airplay.sh).")
     MODULE_AUTHOR      = "PulseBox"
 
@@ -103,7 +153,6 @@ class AirPlayReceiverModule(JukeboxModule):
         self._streaming    = False
         self._meta         = {}          # title / artist / album / client
         self._seen_codes   = set()       # distinct pipe codes seen (diagnostic)
-        self._dbus_bus     = ""          # remembered working D-Bus ("--system")
         self._art_data     = None        # newest art bytes (survives overlay)
         self._overlay      = None
         self._art_label    = None
@@ -122,6 +171,12 @@ class AirPlayReceiverModule(JukeboxModule):
 
     def on_load(self, app):
         super().on_load(app)
+        # Don't spin up the receiver (and its pipe-wait) if there's no working
+        # sound card — Shairport can't play, so there'd be nothing but noise.
+        if getattr(getattr(app, "player", None), "no_audio_device", False):
+            self._set_status("No audio device - AirPlay disabled")
+            print("[AirPlay] No audio device detected - receiver not started.")
+            return
         if self.config.get("airplay_enabled", False):
             installed, _, _ = _shairport_info()
             if installed:
@@ -279,6 +334,22 @@ class AirPlayReceiverModule(JukeboxModule):
         # Content-based fallback: identify art by what it *is*, not by code
         # name — builds differ, and art may be wrapped in a container.
         if data and code != "PICT":
+            # macOS buffered-mode wraps art (and often the track metadata) in
+            # an Apple binary plist — parse it properly rather than just
+            # scavenging the image out of it.
+            if data[:8] == b"bplist00":
+                img, pmeta = _parse_bplist(data)
+                if pmeta:
+                    for k, v in pmeta.items():
+                        if self._meta.get(k) != v:
+                            self._meta[k] = v
+                            print(f"[AirPlay] {k}: {v}")
+                    self._push_meta()
+                if img:
+                    print(f"[AirPlay] cover art from plist in '{code}' "
+                          f"({len(img)} bytes)")
+                    self._on_art(img)
+                    return
             img = _extract_image(data)
             if img:
                 where = "embedded in" if not _is_image(data) else "in"
@@ -443,18 +514,10 @@ class AirPlayReceiverModule(JukeboxModule):
                                    wraplength=600)
         self._lbl_album.pack(pady=(2, 0))
 
-        # Transport controls (best-effort — only affect the source where the
-        # AirPlay sender exposes remote control)
-        ctl = tk.Frame(wrap, bg=BG_DARK)
-        ctl.pack(pady=(22, 0))
-        for label, method in (("⏮", "Previous"),
-                              ("⏯", "PlayPause"),
-                              ("⏭", "Next")):
-            tk.Button(ctl, text=label, font=("Helvetica", 20),
-                      fg=TEXT_PRIMARY, bg=BG_CARD, relief="flat", bd=0,
-                      cursor="hand2", padx=18, pady=6,
-                      command=lambda mth=method: self._remote(mth)
-                      ).pack(side="left", padx=8)
+        # No transport controls: macOS streams in AirPlay 2 "Buffered" mode and
+        # doesn't provide the DACP credentials (daid/acre) Shairport Sync needs
+        # to relay commands back to the sender, so the buttons could never do
+        # anything. Use the controls on the source device instead.
 
         self._lbl_client = tk.Label(ov, text="AirPlay", font=FONT_SMALL,
                                     fg=TEXT_SECONDARY, bg=BG_DARK)
@@ -476,43 +539,6 @@ class AirPlayReceiverModule(JukeboxModule):
         self._art_label = self._art_photo = None
         self._lbl_title = self._lbl_artist = None
         self._lbl_album = self._lbl_client = None
-
-    # ------------------------------------------------------------------
-    # Transport — Shairport Sync D-Bus RemoteControl (best effort)
-    # ------------------------------------------------------------------
-
-    def _remote(self, method: str) -> bool:
-        # Shairport Sync's D-Bus interface defaults to the *system* bus when it
-        # runs as a systemd service, so try that first. Remember whichever bus
-        # works so later presses go straight there.
-        buses = ([self._dbus_bus] if self._dbus_bus
-                 else ["--system", "--session"])
-        last_err = ""
-        for bus in buses:
-            try:
-                r = subprocess.run(
-                    ["dbus-send", bus, "--type=method_call",
-                     "--dest=org.gnome.ShairportSync",
-                     "/org/gnome/ShairportSync",
-                     f"org.gnome.ShairportSync.RemoteControl.{method}"],
-                    timeout=5, capture_output=True, text=True)
-                if r.returncode == 0:
-                    self._dbus_bus = bus
-                    print(f"[AirPlay] transport '{method}' sent ({bus})")
-                    return True
-                last_err = (r.stderr or r.stdout or "").strip()
-            except FileNotFoundError:
-                self._set_status(
-                    "dbus-send not found - install dbus (apt install dbus)",
-                    error=True)
-                return False
-            except Exception as e:
-                last_err = str(e)
-        # Surface the real reason rather than a vague "not available"
-        detail = last_err.splitlines()[-1] if last_err else "no response"
-        print(f"[AirPlay] transport '{method}' failed: {detail}")
-        self._set_status(f"Transport unavailable: {detail[:60]}")
-        return False
 
     # ------------------------------------------------------------------
     # Status helper

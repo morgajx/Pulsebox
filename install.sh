@@ -123,6 +123,9 @@ PULSEBOX_DIR="$SCRIPT_DIR"
 PULSEBOX_USER="${SUDO_USER:-$(whoami)}"
 PULSEBOX_HOME=$(eval echo "~$PULSEBOX_USER")
 
+# Name PulseBox advertises in the AirPlay menu on iPhone/iPad/Mac
+AIRPLAY_NAME="${AIRPLAY_NAME:-PulseBox}"
+
 # ---------------------------------------------------------------------------
 # Pre-flight checks
 # ---------------------------------------------------------------------------
@@ -218,6 +221,38 @@ section "System packages"
     # service to free the DLNA port and avoid a conflict.
     apt_install minidlna
     sudo systemctl disable --now minidlna 2>/dev/null || true
+    # UPnP/DLNA renderer — lets Android phones cast audio to PulseBox
+    # (Chromecast itself is proprietary and can't be implemented).
+    apt_install gmediarender
+
+    # grim: used by the launcher's "framekeeper" to keep the Wayland compositor
+    # presenting frames smoothly in a fullscreen kiosk (avoids sluggish
+    # scrolling / half-drawn rows on wlroots + XWayland). Harmless if unused.
+    apt_install grim
+
+    # Optical-disc PLAYBACK prerequisites for the CD Player / DVD Player
+    # plugins. Installed unconditionally (unlike the optional CD *ripping*
+    # section below), since playing a disc is a core feature: cdparanoia reads
+    # the audio-CD table of contents, eject handles the ⏏ button. VLC (above)
+    # does the actual CD/DVD playback; libdvdcss for encrypted DVDs is still
+    # set up in the DVD section further down.
+    apt_install cdparanoia eject
+
+    # Nuitka toolchain for the optional compiled build (build.sh). patchelf is
+    # required for --standalone/--onefile; nuitka + helpers come from pip.
+    apt_install patchelf
+    if python3 -m nuitka --version >/dev/null 2>&1; then
+        success "Nuitka already installed"
+    else
+        info "Installing Nuitka (for the optional compiled build)..."
+        if pip_install nuitka ordered-set zstandard; then
+            success "Nuitka installed"
+        else
+            warn "Could not install Nuitka — the app still runs from source."
+            warn "For the compiled build, install it manually:"
+            warn "  pip install nuitka ordered-set zstandard --break-system-packages"
+        fi
+    fi
 
 section "Remove PulseAudio (conflicts with PipeWire)"
 if dpkg -l pulseaudio &>/dev/null 2>&1; then
@@ -796,7 +831,11 @@ case "$AUTOSTART_CHOICE" in
         LXDE_DIR="/etc/xdg/lxsession/LXDE-pi"
         AUTOSTART_FILE="$LXDE_DIR/autostart"
         sudo mkdir -p "$LXDE_DIR"
-        AUTOSTART_LINE="@python3 $PULSEBOX_DIR/pulsebox.py"
+        # Launch whichever is newer — compiled build or Python source.
+        AUTOSTART_LINE="@bash $PULSEBOX_DIR/scripts/pulsebox_launcher.sh"
+        # Remove any old direct-python entry so we don't double-launch.
+        sudo sed -i "\|@python3 $PULSEBOX_DIR/pulsebox.py|d" \
+            "$AUTOSTART_FILE" 2>/dev/null || true
         if grep -qF "$AUTOSTART_LINE" "$AUTOSTART_FILE" 2>/dev/null; then
             info "LXDE autostart entry already present"
         else
@@ -815,7 +854,10 @@ After=graphical.target
 User=$PULSEBOX_USER
 Environment=DISPLAY=:0
 WorkingDirectory=$PULSEBOX_DIR
-ExecStart=/usr/bin/python3 $PULSEBOX_DIR/pulsebox.py
+# Launcher starts the compiled build if it's newer than the source, else the
+# Python source. PULSEBOX_DIR_SRC pins where the source lives.
+Environment=PULSEBOX_DIR_SRC=$PULSEBOX_DIR
+ExecStart=/usr/bin/env bash $PULSEBOX_DIR/scripts/pulsebox_launcher.sh
 Restart=on-failure
 RestartSec=5
 
@@ -831,6 +873,43 @@ SVCEOF
         info "Skipping autostart — run manually with: python3 $PULSEBOX_DIR/pulsebox.py"
         ;;
 esac
+
+# =============================================================================
+# Kiosk display optimisation (labwc / Wayland)
+# =============================================================================
+# On Raspberry Pi OS the desktop wallpaper (pcmanfm) and taskbar (wf-panel-pi)
+# keep compositing *behind* a fullscreen app, which makes a kiosk noticeably
+# slower than the same app in a plain window. A dedicated PulseBox appliance
+# doesn't need them. A user labwc autostart is MERGED with the system one (it
+# doesn't replace it), so we can't just omit those lines — we start what we
+# need and kill the desktop/panel a few seconds after they spawn.
+if [[ "$AUTOSTART_CHOICE" != "3" ]] && command -v labwc >/dev/null 2>&1; then
+    section "Kiosk display optimisation (labwc)"
+    LABWC_DIR="$PULSEBOX_HOME/.config/labwc"
+    LABWC_AUTOSTART="$LABWC_DIR/autostart"
+    sudo -u "$PULSEBOX_USER" mkdir -p "$LABWC_DIR"
+    if [[ -f "$LABWC_AUTOSTART" ]] && \
+       ! grep -q "PulseBox kiosk" "$LABWC_AUTOSTART" 2>/dev/null; then
+        sudo -u "$PULSEBOX_USER" cp "$LABWC_AUTOSTART" \
+            "$LABWC_AUTOSTART.bak.$(date +%s)" 2>/dev/null || true
+        info "Backed up existing labwc autostart"
+    fi
+    sudo -u "$PULSEBOX_USER" tee "$LABWC_AUTOSTART" >/dev/null <<'LWEOF'
+# PulseBox kiosk — drop the desktop wallpaper and panel so they don't composite
+# behind the fullscreen app and slow it down. Delete this file to restore the
+# normal Raspberry Pi desktop.
+/usr/bin/kanshi &
+( sleep 3
+  pkill -f "lwrespawn.*wf-panel-pi"; pkill -f "lwrespawn.*pcmanfm-pi"
+  pkill -f wf-panel-pi; pkill -f pcmanfm
+) &
+/usr/bin/lxsession-xdg-autostart
+LWEOF
+    success "Installed labwc kiosk autostart ($LABWC_AUTOSTART)"
+    info "  Desktop wallpaper + panel are dropped for a faster kiosk."
+    info "  Restore the normal desktop any time with:"
+    info "    rm $LABWC_AUTOSTART"
+fi
 
 # =============================================================================
 # Verify PipeWire is running
@@ -899,7 +978,7 @@ SUDOERS_FILE="/etc/sudoers.d/pulsebox"
 SYSTEMCTL="$(command -v systemctl || echo /usr/bin/systemctl)"
 sudo tee "$SUDOERS_FILE" >/dev/null <<EOF
 # Installed by PulseBox — scoped, passwordless service control only.
-$PULSEBOX_USER ALL=(root) NOPASSWD: $SYSTEMCTL disable --now minidlna, $SYSTEMCTL stop minidlna, $SYSTEMCTL start shairport-sync, $SYSTEMCTL stop shairport-sync, $SYSTEMCTL restart shairport-sync
+$PULSEBOX_USER ALL=(root) NOPASSWD: $SYSTEMCTL disable --now minidlna, $SYSTEMCTL stop minidlna, $SYSTEMCTL start shairport-sync, $SYSTEMCTL stop shairport-sync, $SYSTEMCTL restart shairport-sync, $SYSTEMCTL start roonbridge, $SYSTEMCTL stop roonbridge, $SYSTEMCTL restart roonbridge
 EOF
 sudo chmod 0440 "$SUDOERS_FILE"
 if sudo visudo -cf "$SUDOERS_FILE" >/dev/null 2>&1; then
@@ -907,6 +986,33 @@ if sudo visudo -cf "$SUDOERS_FILE" >/dev/null 2>&1; then
 else
     warn "sudoers rule failed validation — removing it to be safe"
     sudo rm -f "$SUDOERS_FILE"
+fi
+
+# =============================================================================
+# AirPlay 2 receiver (nqptp + Shairport Sync)
+# =============================================================================
+# AirPlay 2 isn't available as an apt package — Shairport Sync and its timing
+# daemon nqptp must be compiled from source. The helper does the whole job
+# (build, config with the metadata pipe, D-Bus policy, systemd service).
+# A failure here must not abort the rest of the install, so it's tolerant.
+section "AirPlay 2 receiver"
+
+AIRPLAY_SCRIPT="$PULSEBOX_DIR/scripts/install_airplay.sh"
+if [[ ! -f "$AIRPLAY_SCRIPT" ]]; then
+    warn "scripts/install_airplay.sh not found — skipping AirPlay 2 setup"
+elif command -v shairport-sync >/dev/null 2>&1 && \
+     shairport-sync -V 2>/dev/null | grep -qi "airplay2"; then
+    success "Shairport Sync with AirPlay 2 already installed — skipping build"
+    info "  $(shairport-sync -V 2>/dev/null)"
+else
+    info "Building nqptp + Shairport Sync from source (takes a minute)..."
+    if bash "$AIRPLAY_SCRIPT" "$AIRPLAY_NAME"; then
+        success "AirPlay 2 receiver installed"
+    else
+        warn "AirPlay 2 setup did not complete."
+        warn "Everything else is installed; re-run it later with:"
+        warn "    bash $AIRPLAY_SCRIPT"
+    fi
 fi
 
 # Pre-seed country flags into the radio cache, if the bundle ships them.
@@ -926,6 +1032,39 @@ else
 fi
 
 # =============================================================================
+# Optional: compile to a standalone binary (Nuitka)
+# =============================================================================
+# PulseBox runs fine from Python source; compiling just makes it start faster.
+# Only offered on an interactive install — an unattended "--all" run skips it
+# so it doesn't silently add 10-20 minutes. Failure-isolated: a bad build never
+# aborts the installer, and the app still runs from source.
+if ! $INSTALL_ALL && ! $CORE_ONLY; then
+    header "Optional: compile to a faster binary"
+    echo -e "  PulseBox runs fine from Python source. Compiling with Nuitka"
+    echo -e "  produces a standalone binary that starts faster. It takes"
+    echo -e "  roughly 10-20 minutes on a Pi 5. You can also do it any time"
+    echo -e "  later with:  bash $PULSEBOX_DIR/build.sh"
+    echo ""
+    if ask "Compile the binary now?" "n"; then
+        section "Compiling with Nuitka — this will take a while…"
+        COMPILE_OK=true
+        # Build as the PulseBox user (not root) so dist/ is user-owned and the
+        # source path resolves correctly. build.sh self-installs Nuitka if
+        # needed (already present from the deps step above).
+        sudo -u "$PULSEBOX_USER" bash "$PULSEBOX_DIR/build.sh" || COMPILE_OK=false
+        if $COMPILE_OK && [[ -x "$PULSEBOX_DIR/dist/pulsebox" ]]; then
+            success "Compiled binary built: $PULSEBOX_DIR/dist/pulsebox"
+            info "The launcher runs the compiled build automatically when present."
+        else
+            warn "Compile did not complete — PulseBox still runs from source."
+            warn "Retry any time with:  bash $PULSEBOX_DIR/build.sh"
+        fi
+    else
+        info "Skipping compile — PulseBox will run from Python source."
+    fi
+fi
+
+# =============================================================================
 # Done
 # =============================================================================
 header "Installation complete"
@@ -939,10 +1078,11 @@ echo -e "  python3 pulsebox.py"
 echo ""
 echo -e "  ${BOLD}Web Remote:${RESET}  http://$(hostname -I | awk '{print $1}'):8080"
 echo ""
-echo -e "  ${BOLD}Optional — AirPlay 2 receiver:${RESET}"
-echo -e "  AirPlay 2 must be compiled from source (no apt package). To enable it:"
-echo -e "      bash $PULSEBOX_DIR/scripts/install_airplay.sh"
-echo -e "  then turn on Plugins -> AirPlay 2 Receiver."
+echo -e "  ${BOLD}Cast to PulseBox:${RESET}"
+echo -e "  AirPlay 2 — pick '$AIRPLAY_NAME' from the AirPlay menu on your"
+echo -e "              iPhone, iPad or Mac."
+echo -e "  Android   — use BubbleUPnP / Hi-Fi Cast / VLC and pick 'PulseBox'."
+echo -e "  Enable each under Plugins in PulseBox."
 echo ""
 if [[ "$AUTOSTART_CHOICE" == "2" ]]; then
     echo -e "  ${BOLD}Start service:${RESET}  sudo systemctl start pulsebox"

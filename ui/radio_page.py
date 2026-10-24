@@ -255,14 +255,18 @@ def _fetch_countries() -> list[dict]:
 def _download_flag(cc: str, box_w: int, box_h: int):
     """
     Download a country flag PNG and scale it to fit box_w x box_h while
-    preserving aspect ratio. Cached on disk. Returns PhotoImage or None.
+    preserving aspect ratio. Cached on disk. Returns a PIL.Image or None.
+
+    IMPORTANT: this runs in a worker thread, so it must NOT create a Tkinter
+    PhotoImage here — Tk image objects created off the main thread don't
+    render. The caller builds the PhotoImage on the main thread.
     """
     if not cc or len(cc) != 2:
         return None
     url = _flag_url(cc)
     try:
         import requests
-        from PIL import Image, ImageTk
+        from PIL import Image
         os.makedirs(CACHE_DIR, exist_ok=True)
         cpath = os.path.join(CACHE_DIR, f"flag_{cc.lower()}.png")
         if os.path.exists(cpath) and os.path.getsize(cpath) > 200:
@@ -276,8 +280,7 @@ def _download_flag(cc: str, box_w: int, box_h: int):
         w, h = img.size
         scale = min(box_w / w, box_h / h)
         nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
-        img = img.resize((nw, nh), Image.Resampling.LANCZOS)
-        return ImageTk.PhotoImage(img)
+        return img.resize((nw, nh), Image.Resampling.LANCZOS)
     except Exception as e:
         # A missing flag (404) is expected for some codes — don't make noise;
         # the card just keeps its placeholder.
@@ -371,7 +374,8 @@ class RadioPage(tk.Frame):
         self._countries: list   = []
         self._current_country   = None   # (code, name) or None
         self._view              = "countries"   # countries | stations | podcasts
-        self._flag_photos: dict = {}     # flag_url -> PhotoImage|None
+        self._flag_images: dict = {}     # flag_url -> PIL.Image|None (thread-safe)
+        self._flag_photos: dict = {}     # flag_url -> PhotoImage (main thread only)
         self._flag_canvases: list = []   # (canvas, code) for current country grid
 
         # Podcasts
@@ -703,10 +707,10 @@ class RadioPage(tk.Frame):
         work = queue.Queue()
         for canvas, code in self._flag_canvases:
             url = _flag_url(code)
-            if url in self._flag_photos:
-                photo = self._flag_photos[url]
-                if photo:
-                    self._apply_flag(canvas, photo)
+            if url in self._flag_images:
+                img = self._flag_images[url]
+                if img is not None:
+                    self._apply_flag(canvas, code, img)   # main thread
                 continue
             work.put((canvas, code))
 
@@ -721,22 +725,25 @@ class RadioPage(tk.Frame):
                 canvas, code = work.get_nowait()
             except queue.Empty:
                 return
-            url   = _flag_url(code)
-            photo = _download_flag(code, FLAG_W, FLAG_H)
-            self._flag_photos[url] = photo
-            if photo:
-                def _update(p=photo, cv=canvas):
-                    self._apply_flag(cv, p)
-                self._dispatch(_update)
+            url = _flag_url(code)
+            img = _download_flag(code, FLAG_W, FLAG_H)   # PIL image (or None)
+            self._flag_images[url] = img
+            if img is not None:
+                self._dispatch(
+                    lambda cv=canvas, c=code, im=img: self._apply_flag(cv, c, im))
 
-    def _apply_flag(self, canvas: tk.Canvas, photo):
-        if photo is None:
+    def _apply_flag(self, canvas: tk.Canvas, code: str, pil_img):
+        """Create the PhotoImage HERE (main thread) and draw it."""
+        if pil_img is None:
             return
         try:
             if not canvas.winfo_exists():
                 return
+            from PIL import ImageTk
+            photo = ImageTk.PhotoImage(pil_img)     # main thread — renders
+            self._flag_photos[_flag_url(code)] = photo
             canvas.delete("all")
-            canvas._photo = photo
+            canvas._photo = photo                   # keep a per-canvas ref
             self._photo_refs.append(photo)
             canvas.create_image(FLAG_W // 2, FLAG_H // 2,
                                 image=photo, anchor="center")

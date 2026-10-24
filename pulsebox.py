@@ -101,6 +101,7 @@ class PulseBoxApp:
         self._wire_events()
         self._load_library()
         self._load_modules()
+        self._apply_kiosk_cursor()   # hide cursor across the freshly-built UI
 
     # ------------------------------------------------------------------
     # Window setup
@@ -123,8 +124,19 @@ class PulseBoxApp:
         self.root.configure(bg=BG_DARK)
 
         # Make it feel like a kiosk if configured
+        self._kiosk_hide_cursor = False
         if self.config.get("kiosk_mode"):
             self.root.attributes("-fullscreen", True)
+            # Touchscreen kiosk: there's no mouse, so hide the pointer. A
+            # parked cursor otherwise sits over the app and touches land as
+            # hover-at-the-cursor (pointer -> hand) instead of taps, which
+            # feels like a frozen screen. option_add makes every widget built
+            # afterwards default to no cursor; _apply_kiosk_cursor() then
+            # overrides the explicit hand2 cursors on buttons.
+            if self.config.get("hide_cursor", True):
+                self.root.option_add("*Cursor", "none")
+                self.root.configure(cursor="none")
+                self._kiosk_hide_cursor = True
         else:
             self.root.resizable(True, True)
 
@@ -222,6 +234,13 @@ class PulseBoxApp:
         self._player_bar = _PB(self.root, self.player)
         self._player_bar.pack(fill="x", side="bottom")
 
+        # Surface a missing/faulty sound card clearly — the UI stays up either way
+        if getattr(self.player, "no_audio_device", False):
+            try:
+                self._player_bar.show_no_audio_device()
+            except Exception:
+                pass
+
         # ── Content area ──────────────────────────────────────────────
         self._content_area = tk.Frame(self.root, bg=BG_DARK)
         self._content_area.pack(fill="both", expand=True)
@@ -311,6 +330,23 @@ class PulseBoxApp:
     # Navigation
     # ------------------------------------------------------------------
 
+    def _apply_kiosk_cursor(self, widget=None):
+        """Recursively hide the mouse cursor on every widget (touchscreen
+        kiosk). Overrides the explicit hand2 cursors set on buttons; safe to
+        call repeatedly as pages rebuild dynamically."""
+        if not getattr(self, "_kiosk_hide_cursor", False):
+            return
+        w = widget or self.root
+        try:
+            w.configure(cursor="none")
+        except Exception:
+            pass
+        try:
+            for child in w.winfo_children():
+                self._apply_kiosk_cursor(child)
+        except Exception:
+            pass
+
     def show_page(self, page_id: str):
         if self._active_page == page_id:
             return
@@ -348,6 +384,11 @@ class PulseBoxApp:
             # Video page: scan library on first visit
             if page_id == "video" and not getattr(self._video_page, "_library_ready", False):
                 self.root.after(50, self._video_page.refresh)
+
+            # Re-hide the cursor on this page's widgets (kiosk). The delay lets
+            # batched/dynamic content (album cards, track rows) be created first.
+            if self._kiosk_hide_cursor:
+                self.root.after(600, lambda p=page: self._apply_kiosk_cursor(p))
 
     def refresh_video_library(self):
         """Called by DVDRipper module after a successful rip."""
@@ -516,6 +557,13 @@ class PulseBoxApp:
         """Called once splash is gone — refresh library and show albums."""
         self._albums_page.refresh()
         self.show_page("albums")
+        # Warm the album-art thumbnail cache in the background so the first
+        # visit to the track-listing/covers views isn't slow. Runs batched on
+        # the main thread; starts a moment after the UI settles.
+        try:
+            self.root.after(1200, self._albums_page.prewarm_thumbnails)
+        except Exception:
+            pass
         stats = self.library.get_stats()
         self.show_notification(
             f"Library ready: {stats['total_tracks']} tracks, "

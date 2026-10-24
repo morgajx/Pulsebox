@@ -269,11 +269,37 @@ class AlbumsPage(tk.Frame):
         for alb in all_albums:
             by_artist.setdefault(alb["artist"], []).append(alb)
 
-        for artist in sorted(by_artist.keys(), key=str.upper):
-            self._tree_artist_row(scroll.inner, artist, by_artist[artist])
+        artists = sorted(by_artist.keys(), key=str.upper)
 
-        scroll.bind_all_children_scroll(scroll.inner)
-        self._update_stats()
+        # Render artists in batches via after() so a large library doesn't
+        # freeze the UI while ~thousands of rows and album-art thumbnails are
+        # built. A render token cancels stale batches if the user switches
+        # letter/view before it finishes.
+        self._render_token += 1
+        token = self._render_token
+        BATCH = 6
+
+        def _render_batch(start):
+            if token != self._render_token:
+                return
+            try:
+                if not scroll.inner.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+            end = min(start + BATCH, len(artists))
+            for i in range(start, end):
+                self._tree_artist_row(scroll.inner, artists[i],
+                                      by_artist[artists[i]])
+            if end < len(artists):
+                self.after(1, lambda: _render_batch(end))
+            else:
+                scroll.clear_scroll_bindings()
+                scroll.bind_all_children_scroll(scroll.inner)
+                scroll.refresh_scrollregion()
+                self._update_stats()
+
+        _render_batch(0)
 
     def _tree_artist_row(self, parent, artist, albums):
         artist_frame = tk.Frame(parent, bg=BG_DARK)
@@ -358,9 +384,30 @@ class AlbumsPage(tk.Frame):
     def _show_tree_flat(self, albums):
         scroll = ScrollableFrame(self._content, bg=BG_DARK)
         scroll.pack(fill="both", expand=True)
-        for alb in albums:
-            self._tree_album_row(scroll.inner, alb)
-        scroll.bind_all_children_scroll(scroll.inner)
+
+        self._render_token += 1
+        token = self._render_token
+        BATCH = 10
+
+        def _render_batch(start):
+            if token != self._render_token:
+                return
+            try:
+                if not scroll.inner.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+            end = min(start + BATCH, len(albums))
+            for i in range(start, end):
+                self._tree_album_row(scroll.inner, albums[i])
+            if end < len(albums):
+                self.after(1, lambda: _render_batch(end))
+            else:
+                scroll.clear_scroll_bindings()
+                scroll.bind_all_children_scroll(scroll.inner)
+                scroll.refresh_scrollregion()
+
+        _render_batch(0)
 
     def _draw_tiny_art(self, canvas, art, size):
         from .image_loader import load_image_tk
@@ -605,20 +652,26 @@ class AlbumsPage(tk.Frame):
         except Exception:
             nw_approx = int(w * 0.77)
         text_x = int(w * 0.03) + nw_approx + int(w * 0.04)
-        text_y = h // 2 - 20
+        text_y = h // 2 - 30   # must match _refresh_overlay_labels
 
+        # IMPORTANT: tag these "overlaytext" so _refresh_overlay_labels can
+        # delete them on a track change. Without the tag the old title/artist
+        # were left behind and the new text drew slightly offset over them,
+        # giving a double-vision effect.
         canvas.create_text(text_x, text_y,
                            text=album.get("name", ""),
                            font=FONT_HEADING, fill=TEXT_PRIMARY,
-                           anchor="w", width=w - text_x - 10)
+                           anchor="w", width=w - text_x - 10,
+                           tags="overlaytext")
         canvas.create_text(text_x, text_y + 30,
                            text=album.get("artist", ""),
                            font=FONT_BODY, fill=ACCENT,
-                           anchor="w", width=w - text_x - 10)
+                           anchor="w", width=w - text_x - 10,
+                           tags="overlaytext")
         canvas.create_text(text_x, h - 30,
                            text="Tap to close",
                            font=FONT_TINY, fill=TEXT_DIM,
-                           anchor="w")
+                           anchor="w", tags="overlaytext")
 
     def _close_art_overlay(self, _event=None):
         """Return to album detail view."""
@@ -805,6 +858,60 @@ class AlbumsPage(tk.Frame):
     # ------------------------------------------------------------------
     # Public refresh — called once library scan completes
     # ------------------------------------------------------------------
+
+    def prewarm_thumbnails(self):
+        """
+        Warm the album-art thumbnail cache in the background so the FIRST time
+        a library view is opened it isn't slow decoding every cover. Runs on
+        the main thread (Tk PhotoImages must be built there) in small batches
+        via after(), yielding between batches so it never makes the UI feel
+        sluggish. Tree/track views use 36px art; the covers grid uses ART_SIZE.
+        """
+        try:
+            from .image_loader import load_image_tk
+            from .theme import ART_SIZE
+        except Exception:
+            return
+        try:
+            albums = self._library.get_all_albums()
+        except Exception:
+            return
+        # Warm the 36px track-listing art — that's the view reported as slow on
+        # first open. We deliberately do NOT also warm the larger grid size:
+        # the covers grid is rendered at startup (so it warms naturally), and
+        # warming both sizes for a large library would overflow the bounded
+        # thumbnail cache and evict the very entries we just warmed.
+        _ = ART_SIZE  # (kept import meaningful; grid size intentionally skipped)
+        work = [a["art"] for a in albums if a.get("art")]
+        if not work:
+            return
+        SIZE = 36
+
+        self._prewarm_token = getattr(self, "_prewarm_token", 0) + 1
+        token = self._prewarm_token
+        BATCH = 6
+
+        def _step(i):
+            if token != self._prewarm_token:
+                return
+            try:
+                if not self.winfo_exists():
+                    return
+            except Exception:
+                return
+            end = min(i + BATCH, len(work))
+            for j in range(i, end):
+                try:
+                    load_image_tk(work[j], SIZE)   # decode + cache (main thread)
+                except Exception:
+                    pass
+            if end < len(work):
+                # Generous gap: low priority, keeps the UI fully responsive.
+                self.after(30, lambda: _step(end))
+            else:
+                print(f"[Albums] thumbnail cache pre-warmed ({len(work)} images)")
+
+        _step(0)
 
     def refresh(self):
         """
