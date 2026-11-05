@@ -7,6 +7,8 @@ behaviour are identical to the previous flat layout.
 """
 
 import os
+import glob
+import re
 import subprocess
 import threading
 import tkinter as tk
@@ -133,51 +135,114 @@ def _get_network_drives() -> list[tuple[str, str]]:
     return drives
 
 
-def _get_current_rotation() -> int:
+_TRANSFORM = {0: "normal", 90: "90", 180: "180", 270: "270"}
+
+
+def _wayland_env() -> dict:
+    """Environment for talking to the user's labwc/Wayland session."""
+    env = os.environ.copy()
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    if "WAYLAND_DISPLAY" not in env:
+        for s in sorted(glob.glob(os.path.join(env["XDG_RUNTIME_DIR"], "wayland-*"))):
+            if not s.endswith(".lock"):
+                env["WAYLAND_DISPLAY"] = os.path.basename(s)
+                break
+    return env
+
+
+def _wl_output(env: dict) -> "str | None":
+    """Name of the first connected Wayland output, e.g. HDMI-A-1 or DSI-1."""
     try:
-        with open("/boot/firmware/config.txt") as f:
-            for line in f:
-                if line.strip().startswith("display_rotate="):
-                    val = int(line.split("=")[1])
-                    return {0:0,1:90,2:180,3:270}.get(val, 0)
+        r = subprocess.run(["wlr-randr"], capture_output=True, text=True,
+                           env=env, timeout=5)
+        for line in r.stdout.splitlines():
+            if line and not line[0].isspace():
+                return line.split()[0]
     except Exception:
         pass
-    return 0
+    return None
 
 
-def _set_rotation(degrees: int) -> tuple[bool, str]:
-    import tempfile
-    rot_map = {0:0, 90:1, 180:2, 270:3}
-    val = rot_map.get(degrees, 0)
+def _strip_legacy_display_rotate() -> None:
+    """Remove any obsolete firmware display_rotate= line (ignored under KMS)."""
+    path = "/boot/firmware/config.txt"
     try:
-        with open("/boot/firmware/config.txt") as f:
+        with open(path) as f:
             lines = f.readlines()
-    except Exception as e:
-        return False, f"Cannot read config.txt: {e}"
-    lines = [l for l in lines if not l.strip().startswith("display_rotate=")]
-    if lines and not lines[-1].endswith("\n"):
-        lines[-1] += "\n"
-    lines.append(f"display_rotate={val}  # PulseBox\n")
-    new_content = "".join(lines)
+    except Exception:
+        return
+    kept = [l for l in lines if not l.strip().startswith("display_rotate=")]
+    if len(kept) == len(lines):
+        return
+    new = "".join(kept)
     try:
-        with open("/boot/firmware/config.txt", "w") as f:
-            f.write(new_content)
-        return True, f"Rotation set to {degrees}°. Reboot to apply."
+        with open(path, "w") as f:
+            f.write(new)
+        return
     except PermissionError:
         pass
     try:
         import tempfile
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
-            tmp.write(new_content)
+            tmp.write(new)
             tmp_path = tmp.name
-        r = subprocess.run(["sudo","cp",tmp_path,"/boot/firmware/config.txt"],
-                           capture_output=True, text=True, timeout=8)
+        subprocess.run(["sudo", "cp", tmp_path, path],
+                       capture_output=True, text=True, timeout=8)
         os.unlink(tmp_path)
-        if r.returncode == 0:
-            return True, f"Rotation set to {degrees}°. Reboot to apply."
-        return False, "sudo cp failed — run PulseBox with sudo or add sudoers entry."
+    except Exception:
+        pass
+
+
+def _get_current_rotation() -> int:
+    """Current rotation from the Wayland compositor (not config.txt)."""
+    env = _wayland_env()
+    try:
+        r = subprocess.run(["wlr-randr"], capture_output=True, text=True,
+                           env=env, timeout=5)
+        m = re.search(r"Transform:\s*(\w+)", r.stdout)
+        if m:
+            return {"normal": 0, "90": 90, "180": 180, "270": 270}.get(m.group(1), 0)
+    except Exception:
+        pass
+    return 0
+
+
+def _set_rotation(degrees: int) -> "tuple[bool, str]":
+    """
+    Rotate the display (and touch) via the labwc/Wayland compositor.
+
+    On the Pi 5 the KMS driver owns the display, so the legacy `display_rotate=`
+    in config.txt is ignored. Apply the rotation live with wlr-randr (instant,
+    no reboot) and persist it in a kanshi profile (kanshi is started by the
+    kiosk autostart). wlroots maps the touchscreen through the output transform,
+    so touch rotates with the screen.
+    """
+    t = _TRANSFORM.get(degrees, "normal")
+    env = _wayland_env()
+    out = _wl_output(env)
+    if not out:
+        return False, ("Can't reach the Wayland session — rotation needs "
+                       "wlr-randr and PulseBox running on the desktop.")
+    try:
+        r = subprocess.run(["wlr-randr", "--output", out, "--transform", t],
+                           capture_output=True, text=True, env=env, timeout=8)
+        if r.returncode != 0:
+            return False, f"wlr-randr failed: {(r.stderr or r.stdout).strip()}"
+    except FileNotFoundError:
+        return False, "wlr-randr not installed — sudo apt install wlr-randr"
     except Exception as e:
         return False, str(e)
+    try:
+        cfg_dir = os.path.expanduser("~/.config/kanshi")
+        os.makedirs(cfg_dir, exist_ok=True)
+        with open(os.path.join(cfg_dir, "config"), "w") as f:
+            f.write("profile {\n")
+            f.write(f'    output "{out}" enable transform {t}\n')
+            f.write("}\n")
+    except Exception as e:
+        return True, f"Rotated to {degrees}°, but couldn't save it for next boot: {e}"
+    _strip_legacy_display_rotate()
+    return True, f"Rotated to {degrees}°. Touch follows the screen — no reboot needed."
 
 
 # ---------------------------------------------------------------------------
@@ -766,32 +831,17 @@ class SettingsPage(tk.Frame):
                   relief="flat", bd=0, cursor="hand2", padx=12, pady=5,
                   command=self._apply_rotation).pack(side="right")
 
-        tk.Label(p, text="⚠  Reboot required after changing rotation.",
-                 font=FONT_TINY, fg=WARNING, bg=BG_CARD).pack(
+        tk.Label(p, text="Rotation applies instantly — no reboot needed.",
+                 font=FONT_TINY, fg=TEXT_SECONDARY, bg=BG_CARD).pack(
             anchor="w", pady=(0, 4))
 
     def _apply_rotation(self):
         deg = self._rotation_var.get()
         ok, msg = _set_rotation(deg)
-        self._rotation_status.set(msg)
         if ok:
-            if messagebox.askyesno("Reboot Required",
-                                   f"Rotation set to {deg}°.\nReboot now to apply?",
-                                   parent=self):
-                def _do():
-                    import time; time.sleep(0.5)
-                    try:
-                        r = subprocess.run(["systemctl","reboot"],
-                                           capture_output=True, timeout=5)
-                        if r.returncode != 0:
-                            subprocess.run(["sudo","reboot"], timeout=5)
-                    except Exception as e:
-                        self.after(0, lambda: messagebox.showerror(
-                            "Reboot failed",
-                            f"{e}\n\nRun manually: sudo reboot",
-                            parent=self))
-                threading.Thread(target=_do, daemon=True).start()
+            self._rotation_status.set(f"Current: {deg}°  ·  {msg}")
         else:
+            self._rotation_status.set(msg)
             messagebox.showerror("Rotation Error", msg, parent=self)
 
     # ------------------------------------------------------------------
