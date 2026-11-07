@@ -7,6 +7,8 @@ behaviour are identical to the previous flat layout.
 """
 
 import os
+import glob
+import re
 import subprocess
 import threading
 import tkinter as tk
@@ -133,51 +135,176 @@ def _get_network_drives() -> list[tuple[str, str]]:
     return drives
 
 
-def _get_current_rotation() -> int:
+_TRANSFORM = {0: "normal", 90: "90", 180: "180", 270: "270"}
+
+
+def _wayland_env() -> dict:
+    """Environment for talking to the user's labwc/Wayland session."""
+    env = os.environ.copy()
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    if "WAYLAND_DISPLAY" not in env:
+        for s in sorted(glob.glob(os.path.join(env["XDG_RUNTIME_DIR"], "wayland-*"))):
+            if not s.endswith(".lock"):
+                env["WAYLAND_DISPLAY"] = os.path.basename(s)
+                break
+    return env
+
+
+def _wl_output(env: dict) -> "str | None":
+    """Name of the first connected Wayland output, e.g. HDMI-A-1 or DSI-1."""
     try:
-        with open("/boot/firmware/config.txt") as f:
-            for line in f:
-                if line.strip().startswith("display_rotate="):
-                    val = int(line.split("=")[1])
-                    return {0:0,1:90,2:180,3:270}.get(val, 0)
+        r = subprocess.run(["wlr-randr"], capture_output=True, text=True,
+                           env=env, timeout=5)
+        for line in r.stdout.splitlines():
+            if line and not line[0].isspace():
+                return line.split()[0]
     except Exception:
         pass
-    return 0
+    return None
 
 
-def _set_rotation(degrees: int) -> tuple[bool, str]:
-    import tempfile
-    rot_map = {0:0, 90:1, 180:2, 270:3}
-    val = rot_map.get(degrees, 0)
+def _strip_legacy_display_rotate() -> None:
+    """Remove any obsolete firmware display_rotate= line (ignored under KMS)."""
+    path = "/boot/firmware/config.txt"
     try:
-        with open("/boot/firmware/config.txt") as f:
+        with open(path) as f:
             lines = f.readlines()
-    except Exception as e:
-        return False, f"Cannot read config.txt: {e}"
-    lines = [l for l in lines if not l.strip().startswith("display_rotate=")]
-    if lines and not lines[-1].endswith("\n"):
-        lines[-1] += "\n"
-    lines.append(f"display_rotate={val}  # PulseBox\n")
-    new_content = "".join(lines)
+    except Exception:
+        return
+    kept = [l for l in lines if not l.strip().startswith("display_rotate=")]
+    if len(kept) == len(lines):
+        return
+    new = "".join(kept)
     try:
-        with open("/boot/firmware/config.txt", "w") as f:
-            f.write(new_content)
-        return True, f"Rotation set to {degrees}°. Reboot to apply."
+        with open(path, "w") as f:
+            f.write(new)
+        return
     except PermissionError:
         pass
     try:
         import tempfile
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
-            tmp.write(new_content)
+            tmp.write(new)
             tmp_path = tmp.name
-        r = subprocess.run(["sudo","cp",tmp_path,"/boot/firmware/config.txt"],
-                           capture_output=True, text=True, timeout=8)
+        subprocess.run(["sudo", "cp", tmp_path, path],
+                       capture_output=True, text=True, timeout=8)
         os.unlink(tmp_path)
+    except Exception:
+        pass
+
+
+def _get_current_rotation() -> int:
+    """Current rotation from the Wayland compositor (not config.txt)."""
+    env = _wayland_env()
+    try:
+        r = subprocess.run(["wlr-randr"], capture_output=True, text=True,
+                           env=env, timeout=5)
+        m = re.search(r"Transform:\s*(\w+)", r.stdout)
+        if m:
+            return {"normal": 0, "90": 90, "180": 180, "270": 270}.get(m.group(1), 0)
+    except Exception:
+        pass
+    # Fallback: read the transform from the kanshi config (works without a
+    # live Wayland connection, e.g. when PulseBox runs as a service).
+    try:
+        with open(os.path.expanduser("~/.config/kanshi/config")) as f:
+            m = re.search(r"\btransform\s+(\w+)", f.read())
+            if m:
+                return {"normal": 0, "0": 0, "90": 90, "180": 180, "270": 270}.get(m.group(1), 0)
+    except Exception:
+        pass
+    return 0
+
+
+def _reload_kanshi(env: dict) -> bool:
+    """Tell a running kanshi to re-read its config and re-apply the outputs."""
+    try:
+        r = subprocess.run(["kanshictl", "reload"], capture_output=True,
+                           text=True, env=env, timeout=6)
         if r.returncode == 0:
-            return True, f"Rotation set to {degrees}°. Reboot to apply."
-        return False, "sudo cp failed — run PulseBox with sudo or add sudoers entry."
+            return True
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    # Fallback: restart kanshi so it reloads the config on start.
+    try:
+        subprocess.run(["pkill", "-x", "kanshi"], capture_output=True, timeout=5)
+        subprocess.Popen(["kanshi"], env=env,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
+def _write_kanshi_transform(out: str, t: str) -> None:
+    """Set `transform <t>` on the output line in ~/.config/kanshi/config,
+    preserving any existing mode/scale/position; create a minimal profile if
+    there is no config yet."""
+    cfg_dir = os.path.expanduser("~/.config/kanshi")
+    os.makedirs(cfg_dir, exist_ok=True)
+    path = os.path.join(cfg_dir, "config")
+    try:
+        with open(path) as f:
+            text = f.read()
+    except Exception:
+        text = ""
+    if re.search(r'output\s+"?%s"?' % re.escape(out), text):
+        def _fix(m):
+            line = m.group(0)
+            if re.search(r'\btransform\s+\S+', line):
+                return re.sub(r'\btransform\s+\S+', f'transform {t}', line)
+            return line.rstrip() + f' transform {t}'
+        new = re.sub(r'output\s+"?%s"?[^\n]*' % re.escape(out), _fix, text, count=1)
+    else:
+        new = 'profile {\n    output "%s" enable transform %s\n}\n' % (out, t)
+    with open(path, "w") as f:
+        f.write(new)
+
+
+def _set_rotation(degrees: int) -> "tuple[bool, str]":
+    """
+    Rotate the display (and touch) through kanshi on the labwc/Wayland desktop.
+
+    On the Pi 5 the KMS driver owns the display, so the legacy `display_rotate=`
+    in config.txt is ignored. Rotation is a compositor transform, and kanshi
+    (started by the kiosk autostart) is the authority — it reverts a bare
+    wlr-randr change — so we set the transform in kanshi's profile and reload it.
+    wlroots maps the touchscreen through the output transform, so touch follows
+    the screen. No reboot needed.
+    """
+    t = _TRANSFORM.get(degrees, "normal")
+    env = _wayland_env()
+    # Prefer the output already named in the kanshi config; fall back to wlr-randr.
+    out = None
+    try:
+        with open(os.path.expanduser("~/.config/kanshi/config")) as f:
+            m = re.search(r'output\s+"?([\w-]+)"?', f.read())
+            if m:
+                out = m.group(1)
+    except Exception:
+        pass
+    if not out:
+        out = _wl_output(env)
+    if not out:
+        return False, ("Can't find the display — rotation needs the labwc/Wayland "
+                       "session (wlr-randr) or an existing kanshi config.")
+    try:
+        _write_kanshi_transform(out, t)
     except Exception as e:
-        return False, str(e)
+        return False, f"Couldn't write kanshi config: {e}"
+    reloaded = _reload_kanshi(env)
+    # Bonus live nudge; kanshi holds the value after the reload.
+    try:
+        subprocess.run(["wlr-randr", "--output", out, "--transform", t],
+                       capture_output=True, text=True, env=env, timeout=8)
+    except Exception:
+        pass
+    _strip_legacy_display_rotate()
+    if reloaded:
+        return True, f"Rotated to {degrees}° on {out}. Touch follows the screen — no reboot."
+    return True, (f"Saved {degrees}° for {out}, but couldn't reload kanshi live — "
+                  "log out and back in (or reboot) to apply.")
 
 
 # ---------------------------------------------------------------------------
@@ -766,32 +893,17 @@ class SettingsPage(tk.Frame):
                   relief="flat", bd=0, cursor="hand2", padx=12, pady=5,
                   command=self._apply_rotation).pack(side="right")
 
-        tk.Label(p, text="⚠  Reboot required after changing rotation.",
-                 font=FONT_TINY, fg=WARNING, bg=BG_CARD).pack(
+        tk.Label(p, text="Rotation applies instantly — no reboot needed.",
+                 font=FONT_TINY, fg=TEXT_SECONDARY, bg=BG_CARD).pack(
             anchor="w", pady=(0, 4))
 
     def _apply_rotation(self):
         deg = self._rotation_var.get()
         ok, msg = _set_rotation(deg)
-        self._rotation_status.set(msg)
         if ok:
-            if messagebox.askyesno("Reboot Required",
-                                   f"Rotation set to {deg}°.\nReboot now to apply?",
-                                   parent=self):
-                def _do():
-                    import time; time.sleep(0.5)
-                    try:
-                        r = subprocess.run(["systemctl","reboot"],
-                                           capture_output=True, timeout=5)
-                        if r.returncode != 0:
-                            subprocess.run(["sudo","reboot"], timeout=5)
-                    except Exception as e:
-                        self.after(0, lambda: messagebox.showerror(
-                            "Reboot failed",
-                            f"{e}\n\nRun manually: sudo reboot",
-                            parent=self))
-                threading.Thread(target=_do, daemon=True).start()
+            self._rotation_status.set(f"Current: {deg}°  ·  {msg}")
         else:
+            self._rotation_status.set(msg)
             messagebox.showerror("Rotation Error", msg, parent=self)
 
     # ------------------------------------------------------------------

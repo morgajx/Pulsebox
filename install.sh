@@ -912,6 +912,14 @@ LWEOF
 fi
 
 # =============================================================================
+# From here down is best-effort reporting plus the OPTIONAL compile step.
+# A non-zero exit in this tail (e.g. `pactl` failing on an ALSA-only setup,
+# under `set -euo pipefail`) must NOT abort the installer before the compile
+# prompt is shown, so relax strict mode for the remainder of the script.
+# =============================================================================
+set +euo pipefail
+
+# =============================================================================
 # Verify PipeWire is running
 # =============================================================================
 section "Audio verification"
