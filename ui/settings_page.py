@@ -204,45 +204,107 @@ def _get_current_rotation() -> int:
             return {"normal": 0, "90": 90, "180": 180, "270": 270}.get(m.group(1), 0)
     except Exception:
         pass
+    # Fallback: read the transform from the kanshi config (works without a
+    # live Wayland connection, e.g. when PulseBox runs as a service).
+    try:
+        with open(os.path.expanduser("~/.config/kanshi/config")) as f:
+            m = re.search(r"\btransform\s+(\w+)", f.read())
+            if m:
+                return {"normal": 0, "0": 0, "90": 90, "180": 180, "270": 270}.get(m.group(1), 0)
+    except Exception:
+        pass
     return 0
+
+
+def _reload_kanshi(env: dict) -> bool:
+    """Tell a running kanshi to re-read its config and re-apply the outputs."""
+    try:
+        r = subprocess.run(["kanshictl", "reload"], capture_output=True,
+                           text=True, env=env, timeout=6)
+        if r.returncode == 0:
+            return True
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    # Fallback: restart kanshi so it reloads the config on start.
+    try:
+        subprocess.run(["pkill", "-x", "kanshi"], capture_output=True, timeout=5)
+        subprocess.Popen(["kanshi"], env=env,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
+def _write_kanshi_transform(out: str, t: str) -> None:
+    """Set `transform <t>` on the output line in ~/.config/kanshi/config,
+    preserving any existing mode/scale/position; create a minimal profile if
+    there is no config yet."""
+    cfg_dir = os.path.expanduser("~/.config/kanshi")
+    os.makedirs(cfg_dir, exist_ok=True)
+    path = os.path.join(cfg_dir, "config")
+    try:
+        with open(path) as f:
+            text = f.read()
+    except Exception:
+        text = ""
+    if re.search(r'output\s+"?%s"?' % re.escape(out), text):
+        def _fix(m):
+            line = m.group(0)
+            if re.search(r'\btransform\s+\S+', line):
+                return re.sub(r'\btransform\s+\S+', f'transform {t}', line)
+            return line.rstrip() + f' transform {t}'
+        new = re.sub(r'output\s+"?%s"?[^\n]*' % re.escape(out), _fix, text, count=1)
+    else:
+        new = 'profile {\n    output "%s" enable transform %s\n}\n' % (out, t)
+    with open(path, "w") as f:
+        f.write(new)
 
 
 def _set_rotation(degrees: int) -> "tuple[bool, str]":
     """
-    Rotate the display (and touch) via the labwc/Wayland compositor.
+    Rotate the display (and touch) through kanshi on the labwc/Wayland desktop.
 
     On the Pi 5 the KMS driver owns the display, so the legacy `display_rotate=`
-    in config.txt is ignored. Apply the rotation live with wlr-randr (instant,
-    no reboot) and persist it in a kanshi profile (kanshi is started by the
-    kiosk autostart). wlroots maps the touchscreen through the output transform,
-    so touch rotates with the screen.
+    in config.txt is ignored. Rotation is a compositor transform, and kanshi
+    (started by the kiosk autostart) is the authority — it reverts a bare
+    wlr-randr change — so we set the transform in kanshi's profile and reload it.
+    wlroots maps the touchscreen through the output transform, so touch follows
+    the screen. No reboot needed.
     """
     t = _TRANSFORM.get(degrees, "normal")
     env = _wayland_env()
-    out = _wl_output(env)
+    # Prefer the output already named in the kanshi config; fall back to wlr-randr.
+    out = None
+    try:
+        with open(os.path.expanduser("~/.config/kanshi/config")) as f:
+            m = re.search(r'output\s+"?([\w-]+)"?', f.read())
+            if m:
+                out = m.group(1)
+    except Exception:
+        pass
     if not out:
-        return False, ("Can't reach the Wayland session — rotation needs "
-                       "wlr-randr and PulseBox running on the desktop.")
+        out = _wl_output(env)
+    if not out:
+        return False, ("Can't find the display — rotation needs the labwc/Wayland "
+                       "session (wlr-randr) or an existing kanshi config.")
     try:
-        r = subprocess.run(["wlr-randr", "--output", out, "--transform", t],
-                           capture_output=True, text=True, env=env, timeout=8)
-        if r.returncode != 0:
-            return False, f"wlr-randr failed: {(r.stderr or r.stdout).strip()}"
-    except FileNotFoundError:
-        return False, "wlr-randr not installed — sudo apt install wlr-randr"
+        _write_kanshi_transform(out, t)
     except Exception as e:
-        return False, str(e)
+        return False, f"Couldn't write kanshi config: {e}"
+    reloaded = _reload_kanshi(env)
+    # Bonus live nudge; kanshi holds the value after the reload.
     try:
-        cfg_dir = os.path.expanduser("~/.config/kanshi")
-        os.makedirs(cfg_dir, exist_ok=True)
-        with open(os.path.join(cfg_dir, "config"), "w") as f:
-            f.write("profile {\n")
-            f.write(f'    output "{out}" enable transform {t}\n')
-            f.write("}\n")
-    except Exception as e:
-        return True, f"Rotated to {degrees}°, but couldn't save it for next boot: {e}"
+        subprocess.run(["wlr-randr", "--output", out, "--transform", t],
+                       capture_output=True, text=True, env=env, timeout=8)
+    except Exception:
+        pass
     _strip_legacy_display_rotate()
-    return True, f"Rotated to {degrees}°. Touch follows the screen — no reboot needed."
+    if reloaded:
+        return True, f"Rotated to {degrees}° on {out}. Touch follows the screen — no reboot."
+    return True, (f"Saved {degrees}° for {out}, but couldn't reload kanshi live — "
+                  "log out and back in (or reboot) to apply.")
 
 
 # ---------------------------------------------------------------------------
