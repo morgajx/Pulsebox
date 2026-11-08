@@ -7,7 +7,7 @@
 # A compositor output transform (kanshi/wlr-randr) rotates the *display* but not
 # touch input, because touch mapping is a libinput concern. This writes a udev
 # rule setting LIBINPUT_CALIBRATION_MATRIX on the touchscreen so touch follows
-# the screen. The calibration matrix is the INVERSE of the display rotation.
+# the screen. The calibration matrix uses the same angle as the display.
 #
 # Must run as root (writes /etc/udev/rules.d). PulseBox calls it via a scoped
 # NOPASSWD sudoers entry; it also works stand-alone with `sudo`.
@@ -19,12 +19,13 @@ set -u
 DEG="${1:-0}"
 RULE="/etc/udev/rules.d/99-pulsebox-touch-rotate.rules"
 
-# Display rotation -> touch calibration matrix (the inverse rotation).
+# Display rotation -> touch calibration matrix (same angle as the display;
+# 90 deg confirmed on a Goodix DSI panel).
 case "$DEG" in
     0)   MATRIX="1 0 0 0 1 0" ;;
-    90)  MATRIX="0 1 0 -1 0 1" ;;
+    90)  MATRIX="0 -1 1 1 0 0" ;;
     180) MATRIX="-1 0 1 0 -1 1" ;;
-    270) MATRIX="0 -1 1 1 0 0" ;;
+    270) MATRIX="0 1 0 -1 0 1" ;;
     *)   echo "usage: $0 <0|90|180|270>" >&2; exit 2 ;;
 esac
 
