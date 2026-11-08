@@ -327,6 +327,8 @@ $PULSEBOX_USER ALL=(root) NOPASSWD: /usr/bin/cp * /etc/systemd/system/hifiberry-
 $PULSEBOX_USER ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
 $PULSEBOX_USER ALL=(root) NOPASSWD: /usr/bin/systemctl enable hifiberry-tx-source.service
 $PULSEBOX_USER ALL=(root) NOPASSWD: /usr/bin/systemctl disable hifiberry-tx-source.service
+$PULSEBOX_USER ALL=(root) NOPASSWD: $PULSEBOX_DIR/scripts/set_touch_rotation.sh
+$PULSEBOX_USER ALL=(root) NOPASSWD: $PULSEBOX_DIR/scripts/set_touch_rotation.sh *
 SUDOEOF
 sudo chmod 440 "$SUDOERS_FILE"
 if sudo visudo -c -f "$SUDOERS_FILE" 2>/dev/null; then

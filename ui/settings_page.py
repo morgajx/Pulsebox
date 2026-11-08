@@ -262,6 +262,25 @@ def _write_kanshi_transform(out: str, t: str) -> None:
         f.write(new)
 
 
+def _set_touch_rotation(degrees: int) -> "bool | None":
+    """
+    Match the touchscreen to the rotated display via scripts/set_touch_rotation.sh
+    (writes a libinput calibration-matrix udev rule; needs root). Returns True on
+    success, False if the helper ran but failed, None if it couldn't run at all
+    (helper missing, or sudo needs a password). Touch applies after a reboot.
+    """
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script = os.path.join(repo, "scripts", "set_touch_rotation.sh")
+    if not os.path.exists(script):
+        return None
+    try:
+        r = subprocess.run(["sudo", "-n", script, str(degrees)],
+                           capture_output=True, text=True, timeout=12)
+        return r.returncode == 0
+    except Exception:
+        return None
+
+
 def _set_rotation(degrees: int) -> "tuple[bool, str]":
     """
     Rotate the display (and touch) through kanshi on the labwc/Wayland desktop.
@@ -301,10 +320,21 @@ def _set_rotation(degrees: int) -> "tuple[bool, str]":
     except Exception:
         pass
     _strip_legacy_display_rotate()
-    if reloaded:
-        return True, f"Rotated to {degrees}° on {out}. Touch follows the screen — no reboot."
-    return True, (f"Saved {degrees}° for {out}, but couldn't reload kanshi live — "
-                  "log out and back in (or reboot) to apply.")
+
+    # Match the touchscreen to the new orientation (needs a reboot to take hold).
+    touch = _set_touch_rotation(degrees)
+
+    screen = (f"Rotated to {degrees}° on {out}"
+              if reloaded else
+              f"Saved {degrees}° for {out} (log out/in or reboot to apply the screen)")
+    if touch:
+        return True, f"{screen}. Reboot to apply touch."
+    if touch is False:
+        return True, (f"{screen}. Touch update failed — run "
+                      f"'sudo scripts/set_touch_rotation.sh {degrees}' then reboot.")
+    # touch is None: helper missing or sudo needs a password
+    return True, (f"{screen}. For touch, run "
+                  f"'sudo scripts/set_touch_rotation.sh {degrees}' then reboot.")
 
 
 # ---------------------------------------------------------------------------
