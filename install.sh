@@ -327,6 +327,8 @@ $PULSEBOX_USER ALL=(root) NOPASSWD: /usr/bin/cp * /etc/systemd/system/hifiberry-
 $PULSEBOX_USER ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
 $PULSEBOX_USER ALL=(root) NOPASSWD: /usr/bin/systemctl enable hifiberry-tx-source.service
 $PULSEBOX_USER ALL=(root) NOPASSWD: /usr/bin/systemctl disable hifiberry-tx-source.service
+$PULSEBOX_USER ALL=(root) NOPASSWD: $PULSEBOX_DIR/scripts/set_touch_rotation.sh
+$PULSEBOX_USER ALL=(root) NOPASSWD: $PULSEBOX_DIR/scripts/set_touch_rotation.sh *
 SUDOEOF
 sudo chmod 440 "$SUDOERS_FILE"
 if sudo visudo -c -f "$SUDOERS_FILE" 2>/dev/null; then
@@ -910,6 +912,14 @@ LWEOF
     info "  Restore the normal desktop any time with:"
     info "    rm $LABWC_AUTOSTART"
 fi
+
+# =============================================================================
+# From here down is best-effort reporting plus the OPTIONAL compile step.
+# A non-zero exit in this tail (e.g. `pactl` failing on an ALSA-only setup,
+# under `set -euo pipefail`) must NOT abort the installer before the compile
+# prompt is shown, so relax strict mode for the remainder of the script.
+# =============================================================================
+set +euo pipefail
 
 # =============================================================================
 # Verify PipeWire is running
