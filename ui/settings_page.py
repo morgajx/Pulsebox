@@ -7,6 +7,7 @@ behaviour are identical to the previous flat layout.
 """
 
 import os
+import sys
 import glob
 import re
 import subprocess
@@ -142,9 +143,39 @@ def _get_network_drives() -> list[tuple[str, str]]:
 _SMB_MOUNT_BASE = "/mnt/pulsebox"
 
 
+def _find_repo_script(name: str) -> str:
+    """
+    Locate a helper under scripts/. Must work both from source and from a
+    compiled (Nuitka) build, where __file__ points into a temporary bundle
+    rather than the repo — so check the launcher's env vars and the usual
+    install location, not just __file__.
+    """
+    roots = []
+    for var in ("PULSEBOX_HOME", "PULSEBOX_DIR", "PULSEBOX_DIR_SRC"):
+        v = os.environ.get(var)
+        if v:
+            roots.append(v)
+    roots.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    try:
+        exe = os.path.dirname(os.path.abspath(sys.argv[0]))
+        roots.append(exe)
+        roots.append(os.path.dirname(exe))
+    except Exception:
+        pass
+    roots.append(os.path.expanduser("~/pulsebox"))
+    seen = set()
+    for root in roots:
+        if not root or root in seen:
+            continue
+        seen.add(root)
+        p = os.path.join(root, "scripts", name)
+        if os.path.exists(p):
+            return p
+    return os.path.join(os.path.expanduser("~/pulsebox"), "scripts", name)
+
+
 def _smb_script() -> str:
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(repo, "scripts", "mount_smb.sh")
+    return _find_repo_script("mount_smb.sh")
 
 
 def _smb_safe_name(label: str, share: str) -> str:
@@ -361,8 +392,7 @@ def _set_touch_rotation(degrees: int) -> "bool | None":
     success, False if the helper ran but failed, None if it couldn't run at all
     (helper missing, or sudo needs a password). Touch applies after a reboot.
     """
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    script = os.path.join(repo, "scripts", "set_touch_rotation.sh")
+    script = _find_repo_script("set_touch_rotation.sh")
     if not os.path.exists(script):
         return None
     try:

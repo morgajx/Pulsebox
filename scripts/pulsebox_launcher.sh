@@ -75,6 +75,10 @@ done
 # and starts faster. Fall back to the Python source only when no compiled
 # build is present. (To force source even when a build exists, set
 # PULSEBOX_FORCE_SOURCE=1.)
+# Always expose the SOURCE tree root so the app can find scripts/ (helper
+# scripts like mount_smb.sh / set_touch_rotation.sh live there, not in the
+# compiled build dir, and __file__ points into the Nuitka bundle when compiled).
+export PULSEBOX_HOME="$PY_DIR"
 if [[ -n "$BEST_DIR" && "${PULSEBOX_FORCE_SOURCE:-0}" != "1" ]]; then
     log "Using compiled build ($BEST_DIR)"
     export PULSEBOX_DIR="$BEST_DIR"
