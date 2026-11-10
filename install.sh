@@ -230,6 +230,12 @@ section "System packages"
     # scrolling / half-drawn rows on wlroots + XWayland). Harmless if unused.
     apt_install grim
 
+    # wlr-randr + kanshi: screen (and touch) rotation via a compositor transform
+    # on labwc/Wayland — kanshi persists it and the launcher's rotation code
+    # reloads it. cifs-utils: mount SMB / NAS music shares from
+    # Settings -> Network Drives -> "Add a NAS / SMB share".
+    apt_install wlr-randr kanshi cifs-utils
+
     # Optical-disc PLAYBACK prerequisites for the CD Player / DVD Player
     # plugins. Installed unconditionally (unlike the optional CD *ripping*
     # section below), since playing a disc is a core feature: cdparanoia reads
@@ -329,6 +335,8 @@ $PULSEBOX_USER ALL=(root) NOPASSWD: /usr/bin/systemctl enable hifiberry-tx-sourc
 $PULSEBOX_USER ALL=(root) NOPASSWD: /usr/bin/systemctl disable hifiberry-tx-source.service
 $PULSEBOX_USER ALL=(root) NOPASSWD: $PULSEBOX_DIR/scripts/set_touch_rotation.sh
 $PULSEBOX_USER ALL=(root) NOPASSWD: $PULSEBOX_DIR/scripts/set_touch_rotation.sh *
+$PULSEBOX_USER ALL=(root) NOPASSWD: $PULSEBOX_DIR/scripts/mount_smb.sh
+$PULSEBOX_USER ALL=(root) NOPASSWD: $PULSEBOX_DIR/scripts/mount_smb.sh *
 SUDOEOF
 sudo chmod 440 "$SUDOERS_FILE"
 if sudo visudo -c -f "$SUDOERS_FILE" 2>/dev/null; then

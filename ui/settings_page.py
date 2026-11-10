@@ -135,6 +135,98 @@ def _get_network_drives() -> list[tuple[str, str]]:
     return drives
 
 
+# ---------------------------------------------------------------------------
+# SMB / NAS mounting
+# ---------------------------------------------------------------------------
+
+_SMB_MOUNT_BASE = "/mnt/pulsebox"
+
+
+def _smb_script() -> str:
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(repo, "scripts", "mount_smb.sh")
+
+
+def _smb_safe_name(label: str, share: str) -> str:
+    raw = label.strip() or share.rstrip("/").split("/")[-1] or "share"
+    name = re.sub(r"[^A-Za-z0-9_-]+", "-", raw).strip("-")
+    return name or "share"
+
+
+def _normalise_share(share: str) -> str:
+    s = share.strip().replace("\\", "/")
+    s = re.sub(r"^smb:/*", "", s, flags=re.I)   # accept smb://server/share
+    s = s.lstrip("/")
+    return "//" + s                              # -> //server/share
+
+
+def _write_smb_credentials(name: str, username: str, password: str,
+                           domain: str) -> str:
+    cred_dir = os.path.expanduser("~/.pulsebox/smb")
+    os.makedirs(cred_dir, exist_ok=True)
+    try:
+        os.chmod(cred_dir, 0o700)
+    except Exception:
+        pass
+    path = os.path.join(cred_dir, f"{name}.cred")
+    lines = [f"username={username}", f"password={password}"]
+    if domain.strip():
+        lines.append(f"domain={domain.strip()}")
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    try:
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
+    return path
+
+
+def _mount_smb(share: str, username: str, password: str, domain: str,
+               label: str, persist: bool) -> "tuple[bool, str, str]":
+    """Mount an SMB share. Returns (ok, message, mountpoint)."""
+    script = _smb_script()
+    if not os.path.exists(script):
+        return False, "mount helper is missing (scripts/mount_smb.sh)", ""
+    share = _normalise_share(share)
+    if share == "//" or "/" not in share[2:]:
+        return False, "Enter the share as //server/share", ""
+    name = _smb_safe_name(label, share)
+    mountpoint = os.path.join(_SMB_MOUNT_BASE, name)
+    try:
+        cred = _write_smb_credentials(name, username, password, domain)
+    except Exception as e:
+        return False, f"Couldn't write credentials: {e}", ""
+    cmd = ["sudo", "-n", script, "mount", share, mountpoint, cred]
+    if persist:
+        cmd.append("persist")
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        return False, str(e), ""
+    if r.returncode == 0:
+        return True, f"Mounted at {mountpoint}", mountpoint
+    err = (r.stderr or r.stdout).strip() or f"helper exit {r.returncode}"
+    if r.returncode == 1 and "root" in err:
+        err += " (add the NOPASSWD sudoers entry — see install.sh)"
+    return False, err, mountpoint
+
+
+def _unmount_smb(mountpoint: str, forget: bool) -> "tuple[bool, str]":
+    script = _smb_script()
+    if not os.path.exists(script):
+        return False, "mount helper is missing"
+    cmd = ["sudo", "-n", script, "unmount", mountpoint]
+    if forget:
+        cmd.append("forget")
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    except Exception as e:
+        return False, str(e)
+    if r.returncode == 0:
+        return True, f"Unmounted {mountpoint}"
+    return False, (r.stderr or r.stdout).strip() or f"helper exit {r.returncode}"
+
+
 _TRANSFORM = {0: "normal", 90: "90", 180: "180", 270: "270"}
 
 
@@ -472,6 +564,12 @@ class SettingsPage(tk.Frame):
         self._net_drives: list[tuple[str,str]] = []
         self._net_drive_var   = tk.StringVar()
         self._net_combo: ttk.Combobox | None = None
+        self._smb_share_var   = tk.StringVar()
+        self._smb_user_var    = tk.StringVar()
+        self._smb_pass_var    = tk.StringVar()
+        self._smb_domain_var  = tk.StringVar()
+        self._smb_persist_var = tk.BooleanVar(value=True)
+        self._smb_status_var  = tk.StringVar()
 
         self._build()
         self._async_load_wifi()
@@ -767,18 +865,103 @@ class SettingsPage(tk.Frame):
     def _build_netdrive(self, p):
         r = self._row(p, "Mounted Drive")
         self._net_combo = ttk.Combobox(r, textvariable=self._net_drive_var,
-                                       state="readonly", font=FONT_BODY, width=36)
+                                       state="readonly", font=FONT_BODY, width=30)
         self._net_combo.pack(side="left", padx=(0, 8), ipady=3)
         self._net_combo["values"] = ["Scanning…"]
         tk.Button(r, text="⟳ Refresh", font=FONT_SMALL,
                   fg=ACCENT, bg=BG_PANEL, relief="flat", bd=0,
                   cursor="hand2", padx=8, pady=4,
                   command=self._async_load_drives).pack(side="left")
+        tk.Button(r, text="Unmount", font=FONT_SMALL,
+                  fg=ACCENT, bg=BG_PANEL, relief="flat", bd=0,
+                  cursor="hand2", padx=8, pady=4,
+                  command=self._unmount_selected_drive).pack(side="left")
 
-        tk.Label(p, text='Select a drive then click "Use Selected Drive →" in Music Library.',
+        tk.Label(p, text='Select a drive then click "Use Network Drive →" in Music Library.',
                  font=FONT_TINY, fg=TEXT_PRIMARY, bg=BG_CARD,
                  wraplength=580, anchor="w", justify="left").pack(
-            fill="x", pady=(4, 2))
+            fill="x", pady=(4, 8))
+
+        # ---- Add a NAS / SMB share -------------------------------------
+        tk.Label(p, text="Add a NAS / SMB share", font=FONT_SMALL,
+                 fg=ACCENT, bg=BG_CARD, anchor="w").pack(fill="x", pady=(4, 2))
+
+        def _ent(row_label, var, show=None, width=30):
+            rr = self._row(p, row_label)
+            e = tk.Entry(rr, textvariable=var, font=FONT_BODY, bg=BG_PANEL,
+                         fg=TEXT_PRIMARY, insertbackground=ACCENT,
+                         relief="flat", width=width, show=(show or ""))
+            e.pack(side="left", padx=(0, 8), ipady=4)
+            return rr, e
+
+        _ent("Share path", self._smb_share_var)[1].insert(0, "")
+        self._smb_share_var.set("//192.168.0.10/music")
+        _ent("Username", self._smb_user_var)
+        rr_pw, pw_ent = _ent("Password", self._smb_pass_var, show="●")
+        self._smb_show_pw = tk.BooleanVar(value=False)
+        tk.Checkbutton(rr_pw, text="Show", variable=self._smb_show_pw,
+                       font=FONT_SMALL, fg=TEXT_PRIMARY, bg=BG_CARD,
+                       activebackground=BG_CARD, selectcolor=BG_PANEL,
+                       cursor="hand2",
+                       command=lambda: pw_ent.config(
+                           show="" if self._smb_show_pw.get() else "●")
+                       ).pack(side="left")
+        _ent("Domain (optional)", self._smb_domain_var, width=18)
+
+        opt = self._row(p, "")
+        tk.Checkbutton(opt, text="Remount at startup", variable=self._smb_persist_var,
+                       font=FONT_SMALL, fg=TEXT_PRIMARY, bg=BG_CARD,
+                       activebackground=BG_CARD, selectcolor=BG_PANEL,
+                       cursor="hand2").pack(side="left")
+        tk.Button(opt, text="Mount & Add", font=FONT_SMALL, fg=BG_DARK, bg=ACCENT,
+                  relief="flat", bd=0, cursor="hand2", padx=12, pady=6,
+                  command=self._mount_smb_share).pack(side="right")
+
+        tk.Label(p, textvariable=self._smb_status_var, font=FONT_TINY,
+                 fg=TEXT_PRIMARY, bg=BG_CARD, wraplength=580,
+                 anchor="w", justify="left").pack(fill="x", pady=(4, 2))
+        tk.Label(p, text="SMB (Windows/NAS) shares. Enter the path as "
+                         "//server/share. Password is stored in a private "
+                         "credentials file, not in the share list.",
+                 font=FONT_TINY, fg=TEXT_SECONDARY, bg=BG_CARD,
+                 wraplength=580, anchor="w", justify="left").pack(
+            fill="x", pady=(0, 2))
+
+    def _mount_smb_share(self):
+        share = self._smb_share_var.get()
+        user  = self._smb_user_var.get()
+        pw    = self._smb_pass_var.get()
+        dom   = self._smb_domain_var.get()
+        persist = bool(self._smb_persist_var.get())
+        self._smb_status_var.set("Mounting…")
+
+        def _do():
+            ok, msg, mp = _mount_smb(share, user, pw, dom, "", persist)
+            def _done():
+                self._smb_status_var.set(("✓ " if ok else "✗ ") + msg)
+                if ok:
+                    self._async_load_drives()        # refresh the list
+                    self._smb_pass_var.set("")        # don't leave the pw on screen
+            self.after(0, _done)
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _unmount_selected_drive(self):
+        label = self._net_drive_var.get()
+        path = next((m for m, l in self._net_drives if l == label), "")
+        if not path:
+            self._smb_status_var.set("✗ Select a mounted drive first")
+            return
+        forget = path.startswith(_SMB_MOUNT_BASE)   # only forget shares we added
+        self._smb_status_var.set(f"Unmounting {path}…")
+
+        def _do():
+            ok, msg = _unmount_smb(path, forget)
+            def _done():
+                self._smb_status_var.set(("✓ " if ok else "✗ ") + msg)
+                if ok:
+                    self._async_load_drives()
+            self.after(0, _done)
+        threading.Thread(target=_do, daemon=True).start()
 
     def _async_load_drives(self):
         def _scan():
