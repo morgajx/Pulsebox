@@ -610,7 +610,9 @@ class _Handler(BaseHTTPRequestHandler):
             url  = body.get("url", "")
             name = body.get("name", "Radio")
             if url:
-                player.play_url(url, title=name)
+                player.play_mrl(url, meta={"title": name,
+                                           "artist": "Internet Radio",
+                                           "album": ""})
             self._json({"ok": bool(url)})
         elif path == "/api/video/play":
             video_path = body.get("path", "")
