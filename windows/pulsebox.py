@@ -117,6 +117,56 @@ class PulseBoxApp:
     # Window setup
     # ------------------------------------------------------------------
 
+    def _fit_nav_fonts(self, nav_labels, power_labels):
+        """
+        Size the menu bar. Aim for NAV_TEXT_X times body-text size. The full
+        labels ("🎵  Music" … "⏻ Shutdown") cannot be that large and still fit
+        across the window, so when they don't fit the bar switches to compact
+        labels — page names without their icon, power buttons as icon only —
+        and only then shrinks the text if it still has to.
+
+        Returns (nav_font, power_font, button_padx, nav_labels, power_labels).
+        """
+        from tkinter import font as tkfont
+        family, body = FONT_BODY[0], FONT_BODY[1]
+        avail = int(self._win_w * 0.97)
+
+        def total_width(nav_pt, padx, navs, pows, pow_pt):
+            f_nav = tkfont.Font(family=family, size=nav_pt)
+            f_pow = tkfont.Font(family=family, size=pow_pt)
+            # + allowance per button for its border/focus ring and spacing,
+            # which differ slightly between Tk builds
+            # ("  [25]" = room for the Playlist button's queue counter)
+            w  = f_nav.measure("  [25]")
+            w += sum(f_nav.measure(t) + 2 * padx + 14 for t in navs)
+            w += sum(f_pow.measure(t) + 2 * padx + 18 for t in pows)
+            return w
+
+        target = max(body, int(body * NAV_TEXT_X))
+        ratio  = FONT_SMALL[1] / body
+        compact_nav = [t.split(None, 1)[-1] for t in nav_labels]   # drop icon
+        compact_pow = [t.split(None, 1)[0] for t in power_labels]  # icon only
+
+        # 1. full labels at the target size
+        padx = max(8, target // 2)
+        if total_width(target, padx, nav_labels, power_labels,
+                       max(7, int(target * ratio))) <= avail:
+            navs, pows, nav_pt, pow_pt = (nav_labels, power_labels, target,
+                                          max(7, int(target * ratio)))
+        else:
+            # 2. compact labels, largest size up to the target that fits
+            navs, pows, nav_pt = compact_nav, compact_pow, target
+            while nav_pt > body:
+                padx = max(8, nav_pt // 2)
+                if total_width(nav_pt, padx, navs, pows, nav_pt) <= avail:
+                    break
+                nav_pt -= 1
+            pow_pt = nav_pt          # a lone icon reads best at full size
+            padx = max(8, nav_pt // 2)
+        print(f"[Theme] Menu bar text {nav_pt}pt "
+              f"({nav_pt / body:.1f}x body size)")
+        return (family, nav_pt), (family, pow_pt), padx, navs, pows
+
     def _setup_window(self):
         self.root.title("PulseBox")
 
@@ -129,6 +179,8 @@ class PulseBoxApp:
         win_w = min(int(1280 * get_scale()), int(sw * 0.9))
         win_h = min(int(800  * get_scale()), int(sh * 0.9))
         self.root.geometry(f"{win_w}x{win_h}")
+        # Width the menu bar has to fit in (the whole screen in kiosk mode).
+        self._win_w = sw if self.config.get("kiosk_mode") else win_w
 
         self.root.minsize(900, 600)
         self.root.configure(bg=BG_DARK)
@@ -159,9 +211,9 @@ class PulseBoxApp:
 
     def _build_ui(self):
         # ── Navigation bar (top — no separate title bar) ──────────────
-        nav = tk.Frame(self.root, bg="#000000", height=52)
+        # No fixed height: the bar is as tall as its (enlarged) labels.
+        nav = tk.Frame(self.root, bg="#000000")
         nav.pack(fill="x")
-        nav.pack_propagate(False)
         self._nav_frame = nav
 
         # Live status pill — sits in nav bar right side before power buttons
@@ -183,15 +235,25 @@ class PulseBoxApp:
         self._nav_colours: dict[str, str] = {
             pid: col for pid, _, col in nav_items}
 
+        power_items = ["⏻ Shutdown", "↺ Reboot", "ℹ About"]
+        nav_font, power_font, nav_padx, nav_text, power_text = \
+            self._fit_nav_fonts([label for _, label, _ in nav_items],
+                                power_items)
+        nav_items = [(pid, text, col) for (pid, _, col), text
+                     in zip(nav_items, nav_text)]
+        # The Playlist button is re-labelled with the queue count later on.
+        self._playlist_label = dict(
+            (pid, text) for pid, text, _ in nav_items)["playlist"]
+
         for page_id, label, accent in nav_items:
             wrap = tk.Frame(nav, bg="#000000")
             wrap.pack(side="left")
 
             btn = tk.Button(wrap, text=label,
-                            font=FONT_BODY,
+                            font=nav_font,
                             fg="#0a0a0f", bg="#4fc3f7",
                             relief="flat", bd=0, cursor="hand2",
-                            padx=16, pady=10,
+                            padx=nav_padx, pady=10,
                             activeforeground="#0a0a0f",
                             activebackground="#4fc3f7",
                             command=lambda pid=page_id: self.show_page(pid))
@@ -210,26 +272,26 @@ class PulseBoxApp:
             self._nav_buttons[page_id] = btn
 
         # ── Power buttons (right side of nav bar) ─────────────────────
-        tk.Button(nav, text="⏻ Shutdown",
-                  font=FONT_SMALL, fg="#000000", bg="#ff6b35",
+        tk.Button(nav, text=power_text[0],
+                  font=power_font, fg="#000000", bg="#ff6b35",
                   relief="flat", bd=0, cursor="hand2",
-                  padx=12, pady=10,
+                  padx=nav_padx, pady=10,
                   activeforeground="#000000",
                   activebackground="#ff8c55",
                   command=self._confirm_shutdown).pack(side="right", padx=2)
 
-        tk.Button(nav, text="↺ Reboot",
-                  font=FONT_SMALL, fg="#000000", bg="#ff9500",
+        tk.Button(nav, text=power_text[1],
+                  font=power_font, fg="#000000", bg="#ff9500",
                   relief="flat", bd=0, cursor="hand2",
-                  padx=12, pady=10,
+                  padx=nav_padx, pady=10,
                   activeforeground="#000000",
                   activebackground="#ffaa30",
                   command=self._confirm_reboot).pack(side="right", padx=2)
 
-        tk.Button(nav, text="ℹ About",
-                  font=FONT_SMALL, fg="#000000", bg="#ffa500",
+        tk.Button(nav, text=power_text[2],
+                  font=power_font, fg="#000000", bg="#ffa500",
                   relief="flat", bd=0, cursor="hand2",
-                  padx=12, pady=10,
+                  padx=nav_padx, pady=10,
                   activeforeground="#000000",
                   activebackground="#ffbb30",
                   command=lambda: self.show_page("about")).pack(
@@ -479,7 +541,7 @@ class PulseBoxApp:
         n = self.playlist.selection_count
         btn = self._nav_buttons.get("playlist")
         if btn:
-            label = f"♫  Playlist" + (f"  [{n}]" if n > 0 else "")
+            label = self._playlist_label + (f"  [{n}]" if n > 0 else "")
             btn.config(text=label,
                        fg=ACCENT if n > 0 else TEXT_SECONDARY)
 

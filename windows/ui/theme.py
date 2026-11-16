@@ -73,6 +73,17 @@ _BASE = {
 _scale = 1.0
 
 # ---------------------------------------------------------------------------
+# Bar sizing (Windows build). The top menu bar and bottom player bar are read
+# from across a room on a desktop monitor, so they are sized up independently
+# of the page content. Change these three numbers to taste and restart.
+# ---------------------------------------------------------------------------
+NAV_TEXT_X    = 3.0   # menu-bar labels: up to this many times body-text size.
+                      # Reduced automatically if the labels would not fit the
+                      # window width.
+PLAYER_ICON_X = 2.5   # player-bar transport / volume icons
+PLAYER_TEXT_X = 1.8   # player-bar track title / artist / album / times
+
+# ---------------------------------------------------------------------------
 # Scaled constants (module-level, imported with *)
 # ---------------------------------------------------------------------------
 
