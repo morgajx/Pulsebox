@@ -4,14 +4,12 @@
 
 import tkinter as tk
 from tkinter import ttk
-from tkinter import font as tkfont
 from .theme import (ACCENT, ACCENT2, BG_CARD, BG_CARD_HOVER, BG_DARK, BG_PANEL,
                     BORDER, BORDER_ACCENT, FONT_BODY, FONT_SMALL, FONT_TINY,
                     FONT_TRACK_SM, TEXT_DIM, TEXT_PRIMARY, TEXT_SECONDARY,
                     NEON_BLUE, SUCCESS, DANGER, WARNING,
                     FONT_DISPLAY, FONT_HEADING, FONT_SUBHEAD,
-                    ART_SIZE, CARD_W, PAD, PAD_SM, PLAYER_H,
-                    PLAYER_ICON_X, PLAYER_TEXT_X)
+                    ART_SIZE, CARD_W, PAD, PAD_SM, PLAYER_H)
 
 
 class HTouchFader(tk.Canvas):
@@ -405,24 +403,15 @@ class PlayerBar(tk.Frame):
     """Persistent bottom player bar — always visible."""
 
     def __init__(self, parent, player, **kwargs):
-        # No fixed height: the bar grows to fit its (enlarged) contents.
-        super().__init__(parent, bg=BG_PANEL, bd=0, relief="flat", **kwargs)
+        super().__init__(parent, bg=BG_PANEL, height=PLAYER_H,
+                         bd=0, relief="flat", **kwargs)
         self._player        = player
         self._seek_dragging = False
         self._build()
         self._tick()
 
     def _build(self):
-        # Sizes for this bar: text and icons are enlarged by the theme's
-        # PLAYER_TEXT_X / PLAYER_ICON_X multipliers.
-        def _txt(font):
-            return (font[0], max(7, int(font[1] * PLAYER_TEXT_X))) + tuple(font[2:])
-        f_title, f_artist, f_small = _txt(FONT_SUBHEAD), _txt(FONT_SMALL), _txt(FONT_TINY)
-        icon_pt = max(12, int(18 * PLAYER_ICON_X))
-        vol_pt  = max(10, int(13 * PLAYER_ICON_X))
-        side_x  = PLAYER_TEXT_X        # widths of the fixed side panels
-        title_px = tkfont.Font(font=f_title).measure("0") * 26   # ~26 chars
-
+        self.pack_propagate(False)
         # Top accent line — 3px so it stays visible even with 1px offset
         tk.Frame(self, bg=ACCENT, height=3).pack(fill="x")
 
@@ -432,30 +421,25 @@ class PlayerBar(tk.Frame):
         # ── Left: track info ──────────────────────────────────────────
         # Wider than before (was 280) so long track titles like
         # "Communications Breakdown" aren't clipped at the right edge.
-        # Fixed width (so long titles don't shove the transport buttons
-        # around); height comes from the three labels. A grid cell with a
-        # minimum width does that without pack_propagate(False), which would
-        # also pin the height.
-        left = tk.Frame(main, bg=BG_PANEL)
+        left = tk.Frame(main, bg=BG_PANEL, width=360)
         left.pack(side="left", fill="y")
-        left.grid_columnconfigure(0, minsize=max(360, title_px))
-        left.grid_propagate(True)
+        left.pack_propagate(False)
 
         self._lbl_title = tk.Label(
-            left, text="No track playing", width=1,
-            font=f_title, fg=TEXT_PRIMARY,
+            left, text="No track playing",
+            font=FONT_SUBHEAD, fg=TEXT_PRIMARY,
             bg=BG_PANEL, anchor="w")
-        self._lbl_title.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        self._lbl_title.pack(fill="x", padx=(0, 10))
 
         self._lbl_artist = tk.Label(
-            left, text="—", font=f_artist, width=1,
+            left, text="—", font=FONT_SMALL,
             fg=ACCENT, bg=BG_PANEL, anchor="w")
-        self._lbl_artist.grid(row=1, column=0, sticky="ew", padx=(0, 10))
+        self._lbl_artist.pack(fill="x", padx=(0, 10))
 
         self._lbl_album = tk.Label(
-            left, text="", font=f_small, width=1,
+            left, text="", font=FONT_TINY,
             fg=TEXT_PRIMARY, bg=BG_PANEL, anchor="w")
-        self._lbl_album.grid(row=2, column=0, sticky="ew", padx=(0, 10))
+        self._lbl_album.pack(fill="x", padx=(0, 10))
 
         # ── Centre: transport + seek ──────────────────────────────────
         centre = tk.Frame(main, bg=BG_PANEL)
@@ -464,7 +448,7 @@ class PlayerBar(tk.Frame):
         btns = tk.Frame(centre, bg=BG_PANEL)
         btns.pack(pady=(4, 2))
 
-        bcfg = dict(font=("Helvetica", icon_pt), bg=BG_PANEL, pady=0,
+        bcfg = dict(font=("Helvetica", 18), bg=BG_PANEL,
                     relief="flat", bd=0, cursor="hand2",
                     activebackground=BG_PANEL)
 
@@ -491,7 +475,7 @@ class PlayerBar(tk.Frame):
         seek_row.pack(fill="x")
 
         self._lbl_pos = tk.Label(seek_row, text="0:00",
-                                 font=f_small, fg=TEXT_PRIMARY, bg=BG_PANEL)
+                                 font=FONT_TINY, fg=TEXT_PRIMARY, bg=BG_PANEL)
         self._lbl_pos.pack(side="left")
 
         self._seek_var = tk.DoubleVar()
@@ -499,8 +483,7 @@ class PlayerBar(tk.Frame):
         style.theme_use("clam")
         style.configure("PB.Horizontal.TScale",
                         background=BG_PANEL, troughcolor=BG_DARK,
-                        sliderlength=int(14 * PLAYER_TEXT_X),
-                        sliderrelief="flat")
+                        sliderlength=14, sliderrelief="flat")
 
         self._seek = ttk.Scale(seek_row, from_=0, to=100,
                                variable=self._seek_var,
@@ -513,17 +496,18 @@ class PlayerBar(tk.Frame):
         self._seek.bind("<ButtonRelease-1>", self._on_seek_release)
 
         self._lbl_dur = tk.Label(seek_row, text="0:00",
-                                 font=f_small, fg=TEXT_PRIMARY, bg=BG_PANEL)
+                                 font=FONT_TINY, fg=TEXT_PRIMARY, bg=BG_PANEL)
         self._lbl_dur.pack(side="left")
 
         # ── Right: volume slider ──────────────────────────────────────
-        right = tk.Frame(main, bg=BG_PANEL)
+        right = tk.Frame(main, bg=BG_PANEL, width=180)
         right.pack(side="right", fill="y")
+        right.pack_propagate(False)
 
         vol_row = tk.Frame(right, bg=BG_PANEL)
         vol_row.pack(anchor="center", expand=True)
 
-        tk.Label(vol_row, text="🔊", font=("Helvetica", vol_pt),
+        tk.Label(vol_row, text="🔊", font=("Helvetica", 13),
                  fg=TEXT_PRIMARY, bg=BG_PANEL).pack(side="left")
 
         self._vol_var = tk.IntVar(value=self._player.get_volume())
@@ -531,13 +515,13 @@ class PlayerBar(tk.Frame):
         # Touch-friendly volume fader: tap anywhere on the bar to set the level
         # (a ttk.Scale needs the handle dragged, which is unreliable by touch).
         HTouchFader(vol_row, variable=self._vol_var, from_=0, to=100,
-                    length=int(120 * side_x), height=int(28 * side_x),
+                    length=120, height=28,
                     bg=BG_PANEL, fill=ACCENT,
                     command=self._on_vol_change).pack(side="left", padx=4)
 
         self._lbl_vol = tk.Label(vol_row,
                                  text=f"{self._player.get_volume()}%",
-                                 font=f_small, fg=TEXT_PRIMARY,
+                                 font=FONT_TINY, fg=TEXT_PRIMARY,
                                  bg=BG_PANEL, width=4)
         self._lbl_vol.pack(side="left")
 

@@ -58,13 +58,6 @@ Connect plugins.
 
 All the Windows-specific calls are in one new file, `core/winplat.py`.
 
-**Menu bar and player bar sizes** — both bars are sized up for a desktop
-monitor. Three numbers at the top of `ui/theme.py` control it: `NAV_TEXT_X`
-(menu text, default 3.0), `PLAYER_ICON_X` (transport/volume icons, 2.5) and
-`PLAYER_TEXT_X` (track text, 1.8). The menu text is capped by the window
-width: to get near 3× the bar drops the icons from the page buttons and shows
-the power buttons as icons only, which lands at roughly 2.5×.
-
 **Removed** (no Windows counterpart, or Windows already does it)
 
 - Settings → Wi-Fi and Screen Rotation — use Windows Settings.
