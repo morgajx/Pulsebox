@@ -464,6 +464,10 @@ class PulseBoxApp:
         self.player.on_event("track_ended",   self._on_track_ended)
         self.player.on_event("state_changed", self._on_state_changed)
         self.player.on_event("queue_empty",   self._on_queue_empty)
+        # Playback that couldn't start (VLC not loaded, file missing): show it
+        # instead of failing silently. May fire from a player thread.
+        self.player.on_event("playback_error", lambda msg: self.root.after(
+            0, lambda: self.show_notification(msg, "error")))
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _on_track_started(self, track: dict):

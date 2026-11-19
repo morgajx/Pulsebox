@@ -125,6 +125,7 @@ class JukeboxPlayer:
         except (ImportError, Exception) as e:
             print(f"[Player] VLC not available: {e}. Running in demo mode.")
             self._vlc_available = False
+            self.vlc_error = str(e)
 
     def _attach_vlc_events(self):
         em = self._player.event_manager()
@@ -338,13 +339,29 @@ class JukeboxPlayer:
 
     def _play_track(self, track: dict):
         path = track.get("path", "")
-        if self._vlc_available and Path(path).exists():
-            self._player.stop()          # ensure clean start at position 0
-            media = self._instance.media_new(path)
-            self._player.set_media(media)
-            self._player.play()
-            if not self._hw_ctl:
-                self._player.audio_set_volume(self._volume)
+        # Previously, if VLC hadn't loaded or the file was missing, this
+        # skipped playback but still reported PLAYING: the pause icon showed,
+        # the time stayed at 0:00 and there was no sound and no error. Now
+        # it stops and says why.
+        if not self._vlc_available:
+            reason = getattr(self, "vlc_error", "") or "unknown error"
+            msg = f"No sound: VLC did not load ({reason})"
+        elif not Path(path).exists():
+            msg = f"File not found: {path}"
+        else:
+            msg = ""
+        if msg:
+            print(f"[Player] {msg}")
+            self._state = PlayerState.STOPPED
+            self._emit("playback_error", msg)
+            self._emit("state_changed", PlayerState.STOPPED)
+            return
+        self._player.stop()              # ensure clean start at position 0
+        media = self._instance.media_new(path)
+        self._player.set_media(media)
+        self._player.play()
+        if not self._hw_ctl:
+            self._player.audio_set_volume(self._volume)
         self._state = PlayerState.PLAYING
         self._emit("track_started", track)
         self._start_position_thread()
