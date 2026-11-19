@@ -4,6 +4,7 @@
 
 import tkinter as tk
 from tkinter import ttk
+from .theme import fs, px
 from .theme import (ACCENT, ACCENT2, BG_CARD, BG_CARD_HOVER, BG_DARK, BG_PANEL,
                     BORDER, BORDER_ACCENT, FONT_BODY, FONT_SMALL, FONT_TINY,
                     FONT_TRACK_SM, TEXT_DIM, TEXT_PRIMARY, TEXT_SECONDARY,
@@ -342,7 +343,7 @@ class AlbumCard(tk.Frame):
             0, 0, ART_SIZE, ART_SIZE, fill=BG_PANEL, outline=BORDER)
         self._art_canvas.create_text(
             ART_SIZE // 2, ART_SIZE // 2,
-            text="♪", font=("Helvetica", 48), fill=BORDER_ACCENT)
+            text="♪", font=("Helvetica", fs(48)), fill=BORDER_ACCENT)
 
     def _hover_on(self, _e=None):
         self.config(bg=BG_CARD_HOVER)
@@ -388,7 +389,7 @@ def make_track_art_canvas(parent, album: dict | None, bg: str,
         canvas.create_rectangle(0, 0, size, size,
                                 fill=BG_PANEL, outline=BORDER)
         canvas.create_text(size // 2, size // 2,
-                           text="♪", font=("Helvetica", 14),
+                           text="♪", font=("Helvetica", fs(14)),
                            fill=BORDER_ACCENT)
 
     canvas.after(5, _draw)
@@ -421,7 +422,7 @@ class PlayerBar(tk.Frame):
         # ── Left: track info ──────────────────────────────────────────
         # Wider than before (was 280) so long track titles like
         # "Communications Breakdown" aren't clipped at the right edge.
-        left = tk.Frame(main, bg=BG_PANEL, width=360)
+        left = tk.Frame(main, bg=BG_PANEL, width=px(360))
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
 
@@ -448,7 +449,7 @@ class PlayerBar(tk.Frame):
         btns = tk.Frame(centre, bg=BG_PANEL)
         btns.pack(pady=(4, 2))
 
-        bcfg = dict(font=("Helvetica", 18), bg=BG_PANEL,
+        bcfg = dict(font=("Helvetica", fs(18)), bg=BG_PANEL,
                     relief="flat", bd=0, cursor="hand2",
                     activebackground=BG_PANEL)
 
@@ -483,7 +484,7 @@ class PlayerBar(tk.Frame):
         style.theme_use("clam")
         style.configure("PB.Horizontal.TScale",
                         background=BG_PANEL, troughcolor=BG_DARK,
-                        sliderlength=14, sliderrelief="flat")
+                        sliderlength=px(14), sliderrelief="flat")
 
         self._seek = ttk.Scale(seek_row, from_=0, to=100,
                                variable=self._seek_var,
@@ -500,14 +501,14 @@ class PlayerBar(tk.Frame):
         self._lbl_dur.pack(side="left")
 
         # ── Right: volume slider ──────────────────────────────────────
-        right = tk.Frame(main, bg=BG_PANEL, width=180)
+        right = tk.Frame(main, bg=BG_PANEL, width=px(180))
         right.pack(side="right", fill="y")
         right.pack_propagate(False)
 
         vol_row = tk.Frame(right, bg=BG_PANEL)
         vol_row.pack(anchor="center", expand=True)
 
-        tk.Label(vol_row, text="🔊", font=("Helvetica", 13),
+        tk.Label(vol_row, text="🔊", font=("Helvetica", fs(13)),
                  fg=TEXT_PRIMARY, bg=BG_PANEL).pack(side="left")
 
         self._vol_var = tk.IntVar(value=self._player.get_volume())
@@ -515,7 +516,7 @@ class PlayerBar(tk.Frame):
         # Touch-friendly volume fader: tap anywhere on the bar to set the level
         # (a ttk.Scale needs the handle dragged, which is unreliable by touch).
         HTouchFader(vol_row, variable=self._vol_var, from_=0, to=100,
-                    length=120, height=28,
+                    length=px(120), height=px(28),
                     bg=BG_PANEL, fill=ACCENT,
                     command=self._on_vol_change).pack(side="left", padx=4)
 

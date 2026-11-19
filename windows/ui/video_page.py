@@ -53,6 +53,7 @@ from urllib.error import URLError
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 
+from .theme import fs, px
 from .theme import (ACCENT, BG_CARD, BG_CARD_HOVER, BG_DARK,
                     BG_PANEL, BORDER, BORDER_ACCENT, DANGER, FONT_BODY,
                     FONT_DISPLAY, FONT_HEADING, FONT_SMALL, FONT_SUBHEAD,
@@ -342,10 +343,10 @@ class MovieCard(tk.Frame):
         self._canvas.create_rectangle(0, 0, POSTER_W, POSTER_H,
                                       fill=BG_PANEL, outline=BORDER)
         self._canvas.create_text(POSTER_W // 2, POSTER_H // 2 - 10,
-                                 text="🎬", font=("Helvetica", 36),
+                                 text="🎬", font=("Helvetica", fs(36)),
                                  fill=BORDER_ACCENT)
         self._canvas.create_text(POSTER_W // 2, POSTER_H // 2 + 28,
-                                 text="No poster", font=("Helvetica", 9),
+                                 text="No poster", font=("Helvetica", fs(9)),
                                  fill=TEXT_DIM)
         self._canvas.update_idletasks()
 
@@ -408,7 +409,7 @@ class _MpvPlayer(tk.Frame):
             import vlc
         except ImportError:
             tk.Label(self, text="python-vlc not found.",
-                     font=("Helvetica", 14), fg=DANGER,
+                     font=("Helvetica", fs(14)), fg=DANGER,
                      bg="#000000").pack(expand=True)
             return
 

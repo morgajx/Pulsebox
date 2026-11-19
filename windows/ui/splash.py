@@ -8,6 +8,7 @@ centred with dark background. Progress bar sits below the image.
 import os
 import sys
 import tkinter as tk
+from .theme import fs, px
 from tkinter import ttk
 
 # Nuitka --onefile: assets are embedded; also resolve from binary's directory
@@ -54,7 +55,7 @@ class SplashScreen(tk.Frame):
         self._status_lbl = tk.Label(
             bar_frame,
             textvariable=self._status_var,
-            font=("Helvetica", 11, "bold"),
+            font=("Helvetica", fs(11), "bold"),
             fg=PINK_NEON, bg=BG_SPLASH,
             width=60, anchor="center")
         self._status_lbl.pack(pady=(6, 2))
@@ -80,7 +81,7 @@ class SplashScreen(tk.Frame):
 
         tk.Label(bar_frame,
                  text="Stream. Play. Enjoy.",
-                 font=("Helvetica", 8),
+                 font=("Helvetica", fs(8)),
                  fg=CYAN_NEON, bg=BG_SPLASH).pack(pady=(2, 0))
 
         # Image canvas fills remaining space
@@ -120,11 +121,11 @@ class SplashScreen(tk.Frame):
         cx, cy = w // 2, h // 2
         self._canvas.create_text(
             cx - 50, cy - 30, text="Pulse",
-            font=("Helvetica", 52, "italic"),
+            font=("Helvetica", fs(52), "italic"),
             fill=PINK_NEON, anchor="center", tags="img")
         self._canvas.create_text(
             cx + 60, cy + 10, text="Box",
-            font=("Helvetica", 52, "bold"),
+            font=("Helvetica", fs(52), "bold"),
             fill=CYAN_NEON, anchor="center", tags="img")
 
     def _animate_progress(self):

@@ -253,7 +253,7 @@ class PlaylistPage(tk.Frame):
                     return
             canvas.create_rectangle(0, 0, 36, 36, fill=BG_PANEL, outline=BORDER)
             canvas.create_text(18, 18, text="♪",
-                               font=("Helvetica", 14), fill=BORDER_ACCENT)
+                               font=("Helvetica", fs(14)), fill=BORDER_ACCENT)
         canvas.after(1, _do)
 
     def _draw_meter(self):
@@ -290,7 +290,7 @@ class PlaylistPage(tk.Frame):
         remaining = total - used
         c.create_text(w // 2, h // 2,
                       text=f"{remaining} slot{'s' if remaining != 1 else ''} remaining",
-                      font=("Helvetica", 8), fill=TEXT_SECONDARY)
+                      font=("Helvetica", fs(8)), fill=TEXT_SECONDARY)
 
     def _play_playlist(self):
         """Start playback of the pending queue."""

@@ -11,6 +11,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from .theme import fs, px
 from .theme import (ACCENT, ACCENT2, BG_CARD, BG_DARK, BG_PANEL,
                     BORDER, DANGER, FONT_BODY, FONT_DISPLAY, FONT_HEADING,
                     FONT_SMALL, FONT_SUBHEAD, FONT_TINY, NEON_BLUE, PAD,
@@ -84,7 +85,7 @@ class _SettingsCard(tk.Frame):
 
         # Toggle icon
         self._icon = tk.Label(hdr, text="⊞",
-                              font=("Helvetica", 16, "bold"),
+                              font=("Helvetica", fs(16), "bold"),
                               fg=self._accent, bg=BG_PANEL,
                               padx=8, pady=10)
         self._icon.pack(side="left")
@@ -94,7 +95,7 @@ class _SettingsCard(tk.Frame):
                  bg=BG_PANEL, pady=10).pack(side="left")
 
         self._btn = tk.Button(hdr, text=" + ",
-                              font=("Helvetica", 14, "bold"),
+                              font=("Helvetica", fs(14), "bold"),
                               fg=self._accent, bg=BG_PANEL,
                               relief="flat", bd=0, cursor="hand2",
                               padx=14, pady=8,

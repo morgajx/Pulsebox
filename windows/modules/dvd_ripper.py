@@ -47,6 +47,7 @@ from urllib.parse import quote_plus
 
 from core.config import JukeboxModule, APP_VERSION
 from core import winplat
+from ui.theme import fs, px
 from ui.theme import (ACCENT, ACCENT2, BG_CARD, BG_DARK, BG_PANEL,
                       BORDER, DANGER, FONT_BODY, FONT_SMALL,
                       FONT_SUBHEAD, FONT_TINY, NEON_BLUE, SUCCESS,
@@ -846,7 +847,7 @@ class DVDRipper(JukeboxModule):
         log_wrap.pack(fill="both", expand=True)
         self._log_text = tk.Text(
             log_wrap, height=10,
-            font=("Courier", 8), bg="#050505", fg="#88ff88",
+            font=("Courier", fs(8)), bg="#050505", fg="#88ff88",
             insertbackground=ACCENT, state="disabled",
             relief="flat", wrap="word")
         self._log_text.pack(side="left", fill="both", expand=True)

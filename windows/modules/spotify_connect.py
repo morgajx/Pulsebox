@@ -33,6 +33,7 @@ import os
 import threading
 import time
 import tkinter as tk
+from ui.theme import fs, px
 import urllib.request
 import urllib.parse
 from io import BytesIO
@@ -627,7 +628,7 @@ class SpotifyConnect(JukeboxModule):
                      font=FONT_BODY, fg=TEXT_PRIMARY, bg=BG_PANEL).pack()
             tk.Label(outer,
                      text="pip install spotipy --break-system-packages",
-                     font=("Courier", 10), fg=NEON_BLUE,
+                     font=("Courier", fs(10)), fg=NEON_BLUE,
                      bg=BG_DARK, padx=8, pady=4).pack(
                 fill="x", padx=PAD, pady=4)
             return outer
@@ -696,7 +697,7 @@ class SpotifyConnect(JukeboxModule):
 
         # Art thumbnail
         self._art_label = tk.Label(np_frame, text="♪",
-                                   font=("Helvetica", 28),
+                                   font=("Helvetica", fs(28)),
                                    fg=TEXT_PRIMARY, bg=BG_CARD,
                                    width=ART_SIZE, height=ART_SIZE)
         self._art_label.pack(side="left", padx=8, pady=8)
@@ -738,7 +739,7 @@ class SpotifyConnect(JukeboxModule):
                          ("⏯", self._play_pause),
                          ("⏭", self._next)]:
             tk.Button(ctrl, text=txt,
-                      font=("Helvetica", 18),
+                      font=("Helvetica", fs(18)),
                       fg=ACCENT, bg=BG_CARD,
                       relief="flat", bd=0,
                       cursor="hand2", padx=6,

@@ -18,6 +18,7 @@ import time
 import tkinter as tk
 from typing import Callable, Optional
 
+from .theme import fs, px
 from .theme import (BG_DARK, BG_PANEL, BG_CARD, ACCENT, NEON_BLUE, SUCCESS,
                     DANGER, TEXT_PRIMARY, TEXT_DIM, FONT_SMALL, FONT_TINY,
                     BORDER, PAD, PAD_SM)
@@ -133,7 +134,7 @@ class VUMeterWidget(tk.Canvas):
             self.create_line(bar_x, y, w - 8, y, fill=col, dash=(2, 4))
             self.create_text(label_w - 3, y, text=str(db),
                              anchor="e", fill="#444466",
-                             font=("Courier", 8))
+                             font=("Courier", fs(8)))
 
         # Two bars
         gap   = 6
@@ -166,11 +167,11 @@ class VUMeterWidget(tk.Canvas):
             self.create_text(x + bar_w // 2, h - 6,
                              text=("L" if i == 0 else "R"),
                              fill="#aaaacc",
-                             font=("Helvetica", 9, "bold"))
+                             font=("Helvetica", fs(9), "bold"))
 
         self.create_text(w // 2, 4, text="VU METER",
                          fill="#333355", anchor="n",
-                         font=("Helvetica", 8, "bold"))
+                         font=("Helvetica", fs(8), "bold"))
 
 # ---------------------------------------------------------------------------
 # VLC Visualiser subprocess
@@ -288,7 +289,7 @@ class VLCVisualiser:
                 self._cap_ids.append(
                     c.create_rectangle(0, 0, 0, 0, fill="#ffffff", outline=""))
             c.create_text(w // 2, 6, text="VLC VISUALISER",
-                          fill="#333355", font=("Helvetica", 8, "bold"))
+                          fill="#333355", font=("Helvetica", fs(8), "bold"))
             self._built_w, self._built_h = w, h
 
         bar_w, gap = self._bar_w, self._gap

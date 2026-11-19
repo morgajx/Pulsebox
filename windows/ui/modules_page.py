@@ -8,6 +8,7 @@ the module's own UI panel (settings, controls, etc.).
 """
 
 import tkinter as tk
+from .theme import fs, px
 from .theme import (ACCENT, ACCENT2, BG_CARD, BG_DARK, BG_PANEL,
                     BORDER, DANGER, FONT_BODY, FONT_DISPLAY, FONT_SMALL,
                     FONT_SUBHEAD, FONT_TINY, NEON_BLUE, PAD, PAD_SM,
@@ -80,7 +81,7 @@ class _ModuleCard(tk.Frame):
         self._toggle_lbl = tk.Label(
             self._header,
             text="⊞",
-            font=("Helvetica", 16, "bold"),
+            font=("Helvetica", fs(16), "bold"),
             fg=self._accent, bg=BG_PANEL,
             padx=8, pady=10)
         self._toggle_lbl.pack(side="left")
@@ -108,7 +109,7 @@ class _ModuleCard(tk.Frame):
         self._btn = tk.Button(
             self._header,
             text=" + ",
-            font=("Helvetica", 14, "bold"),
+            font=("Helvetica", fs(14), "bold"),
             fg=self._accent, bg="#000000",
             relief="flat", bd=0, cursor="hand2",
             padx=14, pady=8,
@@ -322,6 +323,6 @@ class ModulesPage(tk.Frame):
         )
         code_frame = tk.Frame(parent, bg="#0d0d18", padx=PAD, pady=PAD)
         code_frame.pack(fill="x", padx=PAD, pady=PAD)
-        tk.Label(code_frame, text=example, font=("Courier", 10),
+        tk.Label(code_frame, text=example, font=("Courier", fs(10)),
                  fg=NEON_BLUE, bg="#0d0d18",
                  justify="left", anchor="w").pack(fill="x")

@@ -241,6 +241,21 @@ def init_scale(root: tk.Tk):
     FONT_TRACK_SM = _f("F_TRACK_SM")
 
 
+def fs(size: int) -> int:
+    """
+    Scale a fixed font size written directly in the code (e.g. the A–Z
+    letters or the player icons) by the same factor as the theme fonts.
+    Without it those sizes stay fixed while everything else grows with the
+    screen — on a large Windows display they came out at half size.
+    """
+    return max(6, int(round(size * _scale)))
+
+
+def px(n: int) -> int:
+    """Same as fs(), for fixed pixel sizes (widths, heights)."""
+    return max(1, int(round(n * _scale)))
+
+
 def get_scale() -> float:
     return _scale
 

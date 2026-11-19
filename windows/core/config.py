@@ -63,7 +63,7 @@ class ConfigManager:
 # ---------------------------------------------------------------------------
 # Single version constant — update this one value to bump the whole app
 # ---------------------------------------------------------------------------
-APP_VERSION = "0.303"
+APP_VERSION = "0.304"
 
 class JukeboxModule:
     """

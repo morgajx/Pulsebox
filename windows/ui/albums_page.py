@@ -127,7 +127,7 @@ class AlbumsPage(tk.Frame):
             btn = tk.Button(
                 self._az_frame,
                 text=letter,
-                font=FONT_AZ if letter == "ALL" else ("Helvetica", 11, "bold"),
+                font=FONT_AZ if letter == "ALL" else ("Helvetica", fs(11), "bold"),
                 fg=ACCENT if active else (TEXT_PRIMARY if is_avail else TEXT_DIM),
                 bg=BG_CARD if active else BG_PANEL,
                 relief="flat", bd=0,
@@ -421,7 +421,7 @@ class AlbumsPage(tk.Frame):
         canvas.create_rectangle(0, 0, size, size,
                                 fill=BG_PANEL, outline=BORDER)
         canvas.create_text(size // 2, size // 2,
-                           text="♪", font=("Helvetica", 14),
+                           text="♪", font=("Helvetica", fs(14)),
                            fill=BORDER_ACCENT)
 
     # ------------------------------------------------------------------
@@ -761,7 +761,7 @@ class AlbumsPage(tk.Frame):
         # ▶ play button — plays this track immediately
         play_btn = tk.Button(
             row, text="▶",
-            font=("Helvetica", 13),
+            font=("Helvetica", fs(13)),
             fg=NEON_BLUE, bg=bg, relief="flat", bd=0,
             cursor="hand2", padx=6,
             command=lambda t=track, i=index: self._play_from(all_tracks, i))
@@ -775,7 +775,7 @@ class AlbumsPage(tk.Frame):
         if self._pm:
             add_btn = tk.Button(
                 row, text="＋",
-                font=("Helvetica", 13, "bold"),
+                font=("Helvetica", fs(13), "bold"),
                 fg=ACCENT, bg=bg, relief="flat", bd=0,
                 cursor="hand2", padx=6,
                 command=lambda t=track: self._add_to_queue(t))
