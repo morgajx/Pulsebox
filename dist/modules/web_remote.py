@@ -572,7 +572,20 @@ class _Handler(BaseHTTPRequestHandler):
         playlist = self.module.app.playlist
 
         if path == "/api/play":
-            player.play()
+            # player.play() can only resume a pause or replay a track that is
+            # already loaded. With tracks waiting in the playlist queue and
+            # nothing playing (e.g. straight after PulseBox starts), start the
+            # queue the same way the on-screen Play button does — otherwise
+            # this returned ok and did nothing.
+            from core.player import PlayerState
+            app = self.module.app
+            if (player.get_state() == PlayerState.STOPPED
+                    and playlist.pending_selections
+                    and hasattr(app, "play_playlist")
+                    and hasattr(app, "root")):
+                app.root.after(0, app.play_playlist)
+            else:
+                player.play()
             self._json({"ok": True})
         elif path == "/api/pause":
             player.pause()
@@ -610,7 +623,9 @@ class _Handler(BaseHTTPRequestHandler):
             url  = body.get("url", "")
             name = body.get("name", "Radio")
             if url:
-                player.play_url(url, title=name)
+                player.play_mrl(url, meta={"title": name,
+                                           "artist": "Internet Radio",
+                                           "album": ""})
             self._json({"ok": bool(url)})
         elif path == "/api/video/play":
             video_path = body.get("path", "")
