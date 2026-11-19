@@ -6,6 +6,9 @@ A TouchTunes-inspired Python jukebox application for Raspberry Pi kiosk use.
 Built with **Tkinter** (UI), **python-vlc** (audio), **Mutagen** (metadata),
 **SQLite** (library + cover art BLOB storage), and **mpv** (video playback).
 
+> **Windows:** a port of this app for Windows PCs lives in [`windows/`](windows/README.md).
+> It is a separate copy of the source, so the Pi build here is unaffected.
+
 ---
 
 ## Installation — Raspberry Pi OS Trixie (Debian 13)

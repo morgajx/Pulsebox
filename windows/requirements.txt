@@ -1,0 +1,6 @@
+python-vlc>=3.0.18
+mutagen>=1.47.0
+Pillow>=10.0.0
+requests>=2.31.0
+# Optional — only for the Spotify Connect plugin:
+# spotipy>=2.23.0
